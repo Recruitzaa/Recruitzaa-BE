@@ -1,0 +1,977 @@
+# Recruitzaa — Backend Architecture Plan (v1 — Enterprise Grade)
+
+> **Authored by**: Senior Backend Architect (10 YOE perspective)  
+> **Stack**: Python (FastAPI) · Microservices · MongoDB + PostgreSQL + Redis  
+> **Auth**: Firebase Admin SDK (RBAC — CANDIDATE / EMPLOYER / SUPER_ADMIN)  
+> **Scraping**: Playwright + Scrapling/nodriver  
+> **AI Modules**: OpenAI GPT-4o · Custom NLP · LangChain  
+> **Android**: REST-compatible (same APIs consumed by Android client)  
+> **Concurrency**: Async Python (asyncio) + Celery + Redis · Enterprise-grade
+
+---
+
+## 1. High-Level Architecture (HLD)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                          RECRUITZAA — MICROSERVICES BACKEND                      │
+│                                                                                  │
+│   Clients                         API Gateway (Nginx + Traefik)                 │
+│   ┌─────────┐  ┌──────────┐       ┌─────────────────────────────────────────┐   │
+│   │ React   │  │ Android  │──────▶│  Rate Limiting · Auth Middleware        │   │
+│   │  SPA    │  │   App    │       │  TLS Termination · Request Routing      │   │
+│   └────┬────┘  └────┬─────┘       └──────────────┬──────────────────────────┘   │
+│        └────────────┘                            │                               │
+│                                                  ▼                               │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  ┌────────────────┐  │
+│  │  Auth        │  │  Core API    │  │  AI Service      │  │  Scraper       │  │
+│  │  Service     │  │  Service     │  │  Service         │  │  Service       │  │
+│  │  :8001       │  │  :8002       │  │  :8003           │  │  :8004         │  │
+│  │  FastAPI     │  │  FastAPI     │  │  FastAPI         │  │  FastAPI       │  │
+│  └──────┬───────┘  └──────┬───────┘  └───────┬──────────┘  └────────┬───────┘  │
+│         │                 │                   │                      │           │
+│  ┌──────▼─────────────────▼───────────────────▼──────────────────────▼───────┐  │
+│  │                    MESSAGE BROKER (Redis Streams / Celery)                 │  │
+│  │     scrape_job_queue · ai_task_queue · email_queue · analytics_queue       │  │
+│  └──────┬─────────────────┬───────────────────┬──────────────────────┬───────┘  │
+│         │                 │                   │                      │           │
+│  ┌──────▼───────┐  ┌──────▼───────┐  ┌───────▼──────┐  ┌───────────▼───────┐  │
+│  │  PostgreSQL  │  │   MongoDB    │  │    Redis     │  │   File Storage    │  │
+│  │  (RDBMS)     │  │  (Document)  │  │  (Cache +    │  │  (Firebase Cloud  │  │
+│  │  Users,Auth, │  │  Jobs, Apps, │  │   Sessions + │  │   Storage / S3)   │  │
+│  │  Analytics   │  │  AI Results  │  │   Queues)    │  │  Resumes, Logos   │  │
+│  └──────────────┘  └──────────────┘  └──────────────┘  └───────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 2. Microservices Breakdown
+
+| Service | Port | Framework | Responsibility |
+|---|---|---|---|
+| **Auth Service** | 8001 | FastAPI | Firebase token verify, RBAC, user CRUD |
+| **Core API Service** | 8002 | FastAPI | Jobs, Applications, Kanban, Profiles, Employer |
+| **AI Service** | 8003 | FastAPI | ATS Scoring, Resume parsing, AI Chat, Job matching |
+| **Scraper Service** | 8004 | FastAPI | Job scraping, scheduler, dedup, normalization |
+| **Notification Service** | 8005 | FastAPI | Email (SendGrid), Push (FCM), In-app |
+| **Analytics Service** | 8006 | FastAPI | Dashboards, reports, recruiter metrics |
+| **Admin Service** | 8007 | FastAPI | SUPER_ADMIN, user mgmt, job approvals |
+
+> All services expose REST + emit/consume events via **Redis Streams / Celery**.
+
+---
+
+## 3. Database Strategy — Polyglot Persistence
+
+### 3.1 PostgreSQL — Relational Data (Source of Truth)
+**Used for:** Users, Roles, Employers, Companies, Subscriptions, Audit logs, Analytics
+
+```sql
+-- Core schemas
+users            (id, firebase_uid, email, role, is_active, created_at)
+user_profiles    (user_id, display_name, phone, photo_url, location)
+employers        (id, user_id, company_id, job_title, department)
+companies        (id, name, slug, website, logo_url, verified, plan_tier)
+subscriptions    (id, company_id, plan, start_date, end_date, is_active)
+audit_logs       (id, user_id, action, resource, ip_address, timestamp)
+job_approvals    (id, job_id, admin_id, action, note, created_at)
+analytics_events (id, user_id, event_type, payload::jsonb, timestamp)
+```
+
+**Why PostgreSQL here:**
+- ACID compliance for user/payment/audit data
+- Joins for relational admin reports
+- JSONB columns for flexible event payloads
+
+### 3.2 MongoDB — Document Store
+**Used for:** Jobs, Applications, Kanban boards, AI results, Chat history, Scraped jobs, Profiles
+
+```javascript
+// Collections
+jobs             { _id, title, company, location, salary, tags[], requirements,
+                   description, job_type, work_mode, posted_at, expires_at,
+                   source, source_url, status, employer_id, applicants_count,
+                   scraped_at, is_scraped }
+
+applications     { _id, job_id, candidate_id, employer_id, stage, applied_at,
+                   resume_url, cover_letter, ats_score, stage_history[],
+                   employer_notes[], timeline[] }
+
+kanban_boards    { _id, candidate_id, columns: { SAVED:[], APPLIED:[],
+                   SCREENING:[], INTERVIEW:[], OFFER:[], REJECTED:[] } }
+
+candidate_profiles { _id, user_id, headline, bio, skills[], experience[],
+                     education[], certifications[], languages[], resume_urls[],
+                     preferred_job_types[], preferred_locations[], salary_range,
+                     profile_completion_pct, availability }
+
+employer_profiles  { _id, company_id, about, industry, team_size, culture[],
+                     benefits[], office_photos[], social_links{} }
+
+ai_results       { _id, user_id, job_id, resume_url, ats_score: { overall,
+                   skill_match, experience_fit, keyword_density, formatting,
+                   keywords[], suggestions[] }, computed_at }
+
+chat_sessions    { _id, user_id, messages[{ role, content, timestamp }],
+                   session_type, created_at }
+
+scraped_raw      { _id, source, url, raw_html, normalized{}, scraped_at,
+                   processed, job_id }
+```
+
+**Why MongoDB here:**
+- Flexible schemas for job descriptions (vary massively by source)
+- Nested documents for timeline/stage history
+- Full-text search via Atlas Search or Elasticsearch integration
+- Fast horizontal scaling for high-read job listings
+
+### 3.3 Redis — Cache + Queue + Sessions
+**Used for:**
+- **Session / Token cache**: Firebase token validation cache (5 min TTL)
+- **Job listings cache**: Public job search results (2 min TTL)
+- **Celery broker**: Task queue for AI jobs, scraping, emails
+- **Redis Streams**: Real-time event streaming between services
+- **Rate limiting**: Per-IP and per-user sliding window counters
+- **Leaderboard**: Job popularity, skill demand index
+
+---
+
+## 4. Authentication & Authorization (RBAC)
+
+### 4.1 Firebase → Backend Token Flow
+```
+Client sends: Authorization: Bearer <Firebase ID Token>
+    │
+    ▼
+Auth Service (/auth/verify)
+    │  1. Check Redis cache (token hash → user obj, TTL 5min)
+    │  2. If miss: firebase_admin.auth().verify_id_token(token)
+    │  3. Fetch user from PostgreSQL by firebase_uid
+    │  4. Return: { user_id, email, role, permissions[] }
+    │
+    ▼
+All other services use Auth Service via internal HTTP or JWT-derived context
+```
+
+### 4.2 Roles & Permissions Matrix
+
+| Permission | CANDIDATE | EMPLOYER | SUPER_ADMIN |
+|---|---|---|---|
+| Browse public jobs | ✅ | ✅ | ✅ |
+| Apply to jobs | ✅ | ❌ | ❌ |
+| View own kanban | ✅ | ❌ | ❌ |
+| Use AI Hub (ATS) | ✅ | ❌ | ❌ |
+| Post jobs | ❌ | ✅ | ✅ |
+| View applicants | ❌ | ✅ | ✅ |
+| Approve/reject jobs | ❌ | ❌ | ✅ |
+| Manage all users | ❌ | ❌ | ✅ |
+| Access analytics | own only | company-level | platform-wide |
+| Manage companies | ❌ | own company | ✅ all |
+
+### 4.3 Role Assignment Flow
+```python
+# POST /auth/register → triggered after Firebase signup
+{
+  "firebase_token": "...",
+  "requested_role": "CANDIDATE" | "EMPLOYER",
+  "company_name": "..."    # only if EMPLOYER
+}
+
+# Auth Service:
+# 1. verify firebase token
+# 2. create user in PostgreSQL with role
+# 3. create profile skeleton in MongoDB
+# 4. If EMPLOYER: create company record (pending verification)
+# 5. Emit "user.registered" event to Notification Service
+```
+
+---
+
+## 5. Core API Service — Routes (LLD)
+
+### 5.1 Jobs Module
+```
+GET    /api/jobs                        → Paginated job search (public)
+GET    /api/jobs/{id}                   → Single job detail (public)
+POST   /api/jobs                        → Create job (EMPLOYER)
+PUT    /api/jobs/{id}                   → Update job (EMPLOYER, own jobs)
+DELETE /api/jobs/{id}                   → Delete job (EMPLOYER / ADMIN)
+GET    /api/jobs/{id}/applicants        → Get applicants (EMPLOYER)
+POST   /api/jobs/{id}/apply             → Apply to job (CANDIDATE)
+GET    /api/jobs/recommended            → AI-matched jobs for user (CANDIDATE)
+GET    /api/jobs/employer/mine          → Employer's own posted jobs
+PATCH  /api/jobs/{id}/status            → Approve/Reject (ADMIN)
+```
+
+**Query Params for search:**
+```
+keyword, location, job_type, work_mode, min_salary, max_salary,
+posted_within (days), tags[], page, limit, sort_by, sort_order
+```
+
+### 5.2 Applications Module
+```
+GET    /api/applications                → List own applications (CANDIDATE)
+GET    /api/applications/{id}           → Single application detail
+PATCH  /api/applications/{id}/stage    → Move kanban stage (CANDIDATE)
+POST   /api/applications/{id}/withdraw → Withdraw application
+GET    /api/employer/applications       → All apps for employer's jobs (EMPLOYER)
+PATCH  /api/employer/applications/{id}/status → Shortlist/Reject/Hire (EMPLOYER)
+POST   /api/employer/applications/{id}/note   → Add employer note
+```
+
+### 5.3 Kanban Module
+```
+GET    /api/kanban                      → Full kanban board for candidate
+PUT    /api/kanban/move                 → Move card: { app_id, from_col, to_col, position }
+POST   /api/kanban/save-job             → Save job without applying
+DELETE /api/kanban/save-job/{job_id}    → Remove saved job
+```
+
+### 5.4 Profile Module
+```
+GET    /api/profile                     → Own profile
+PUT    /api/profile                     → Update candidate profile
+POST   /api/profile/resume              → Upload resume (multipart/form-data → Storage)
+DELETE /api/profile/resume/{id}         → Delete a resume version
+GET    /api/profile/{id}                → Public profile (EMPLOYER viewing candidate)
+```
+
+### 5.5 Employer Module
+```
+GET    /api/employer/profile            → Employer profile
+PUT    /api/employer/profile            → Update employer profile
+GET    /api/employer/company            → Company info
+PUT    /api/employer/company            → Update company
+GET    /api/employer/analytics          → Dashboard stats
+GET    /api/employer/candidates         → All candidates with filters
+```
+
+---
+
+## 6. AI Service — Modules (LLD)
+
+### 6.1 ATS Resume Scorer
+```
+POST /api/ai/score-resume
+  Input:  multipart/form-data { resume: File (PDF/DOCX), job_description: str }
+  Output: ATSScore { overall, skill_match, experience_fit, keyword_density,
+                     formatting, keywords[], suggestions[] }
+
+Pipeline:
+  1. Parse resume (pdfplumber for PDF, python-docx for DOCX)
+  2. Extract text, structure sections (Summary, Skills, Experience, Education)
+  3. NLP: extract skills/keywords using spaCy NER + custom skill ontology
+  4. Compare against job description keywords (TF-IDF + semantic similarity)
+  5. Compute scores per dimension
+  6. Store result in MongoDB ai_results collection
+  7. Return to client + cache in Redis (24h TTL per resume+job pair)
+```
+
+### 6.2 AI Career Chat (LangChain + OpenAI)
+```
+POST /api/ai/chat
+  Input:  { session_id, message, context_type: "resume_review" | "career_advice" | "interview_prep" }
+  Output: Streaming SSE response (text/event-stream)
+
+System prompts per context_type:
+  - resume_review: attached candidate's latest resume + job description
+  - career_advice: candidate's skills, experience, market demand data
+  - interview_prep: job JD + company info + common questions
+
+Conversation stored in MongoDB chat_sessions
+```
+
+### 6.3 Job Matching Engine
+```
+GET /api/ai/job-matches?limit=10
+  Input:  candidate profile (fetched internally by user_id)
+  Output: Ranked job list with match scores
+
+Algorithm:
+  1. Encode candidate skills as vector (sentence-transformers)
+  2. Cosine similarity against pre-computed job embeddings (stored in MongoDB)
+  3. Filter by location, salary, job_type preferences
+  4. Return top-N ranked jobs with per-skill match breakdown
+```
+
+### 6.4 Resume Parser API
+```
+POST /api/ai/parse-resume
+  Input:  multipart PDF/DOCX
+  Output: Structured JSON { name, email, phone, skills[], experience[],
+                            education[], certifications[], summary }
+Used for: auto-filling candidate profile on resume upload
+```
+
+### 6.5 AI Celery Workers
+All heavy AI tasks run asynchronously:
+```
+celery -A ai_service.worker worker --queues=ai_tasks --concurrency=4
+```
+- `score_resume_task` → triggered via POST, result polled via `GET /ai/tasks/{task_id}`
+- `compute_job_matches_task` → runs nightly for all active candidates
+- `recompute_embeddings_task` → runs on new job approval
+
+---
+
+## 7. Scraper Service — Architecture
+
+### 7.1 Supported Job Sources (Phase 1)
+| Source | Method | Frequency |
+|---|---|---|
+| LinkedIn Jobs | Playwright (browser automation) | Every 4 hours |
+| Indeed | Playwright + nodriver | Every 4 hours |
+| Naukri.com | Playwright + nodriver | Every 6 hours |
+| TimesJobs | Scrapling (CSS-based) | Every 6 hours |
+| Glassdoor | Playwright headless | Every 8 hours |
+| Company career pages | Scrapling (configurable templates) | Daily |
+
+### 7.2 Scraper Architecture
+```
+Scraper Scheduler (APScheduler / Celery Beat)
+    │
+    ├── Dispatches scrape jobs to: Redis Queue (scrape_tasks)
+    │
+    ▼
+Scraper Worker Pool (multiple async Playwright contexts)
+    │
+    ├── Playwright Browser Pool (chromium headless)
+    │     ├── Context 1: LinkedIn scraper
+    │     ├── Context 2: Indeed scraper
+    │     └── Context N: Other sources
+    │
+    ├── nodriver (for anti-bot protected sites)
+    │
+    ├── Scrapling (fast CSS-based scraping for supported sites)
+    │
+    ▼
+Normalization Pipeline
+    ├── Raw HTML → structured fields (title, company, location, salary, tags)
+    ├── De-duplication (hash of title+company+location → check Redis set)
+    ├── NLP tagging (spaCy: extract skills, experience level from description)
+    ├── Geocoding (location normalization to standard city/country)
+    └── Status: PENDING → queued for ADMIN approval or auto-approve if verified
+    │
+    ▼
+MongoDB (scraped_raw + jobs collections) → Emit job.scraped event
+```
+
+### 7.3 Scraper APIs
+```
+POST /api/scraper/trigger            → Manual scrape trigger (ADMIN)
+GET  /api/scraper/jobs               → View scraped jobs queue (ADMIN)
+POST /api/scraper/approve/{job_id}   → Approve scraped job (ADMIN)
+GET  /api/scraper/stats              → Scraping stats (runs, success rate)
+PUT  /api/scraper/sources            → Update source configs (ADMIN)
+```
+
+### 7.4 Anti-Detection Strategy
+```python
+# Playwright config per scraper:
+{
+  "headless": True,
+  "user_agent": [rotated list of real UAs],
+  "proxy": ["rotating residential proxy pool"],
+  "viewport": random_viewport(),
+  "locale": "en-IN",
+  "geolocation": {...},
+  "stealth_mode": True,  # playwright-stealth plugin
+  "human_delays": True,  # random sleep between actions
+  "fingerprint_rotation": True  # nodriver handles this
+}
+```
+
+---
+
+## 8. Notification Service
+
+```
+Event Consumers:
+  user.registered      → Send welcome email (CANDIDATE or EMPLOYER variant)
+  application.applied  → Notify employer + confirm to candidate
+  application.updated  → Notify candidate of stage change (email + FCM push)
+  job.approved         → Notify employer their job is live
+  job.rejected         → Notify employer with rejection reason
+  job.match.found      → Push notification to candidate (new matching job)
+  interview.scheduled  → Email + push + calendar invite
+```
+
+**Stack:**
+- Email: SendGrid / AWS SES
+- Push: Firebase Cloud Messaging (Android + Web)
+- In-app: Real-time via WebSocket (FastAPI WebSocket / Socket.IO)
+- Templates: Jinja2 HTML email templates
+
+---
+
+## 9. Analytics Service
+
+```
+GET /api/analytics/employer/dashboard
+  Response: {
+    total_jobs_posted, total_applicants, shortlisted_count, hired_count,
+    avg_time_to_hire (days), funnel: { applied→screening→interview→offer→hired },
+    top_job_titles, applicant_skill_distribution, weekly_trend[]
+  }
+
+GET /api/analytics/admin/platform
+  Response: {
+    total_users { candidates, employers, new_today },
+    total_jobs { active, scraped, pending_approval },
+    total_applications { today, this_week },
+    top_companies, top_skills_in_demand, geographic_distribution
+  }
+
+GET /api/analytics/candidate/insights
+  Response: {
+    applications_count, stage_breakdown, avg_ats_score,
+    most_applied_industries, skills_gap_analysis, profile_views
+  }
+```
+
+**Events recorded** (in PostgreSQL analytics_events table via Kafka-like pattern):
+- `job.viewed`, `job.applied`, `search.performed`, `ai.score_requested`,
+  `profile.updated`, `kanban.card_moved`, `employer.candidate_viewed`
+
+---
+
+## 10. Project Directory Structure (LLD)
+
+```
+recruitzaa-be/
+│
+├── docker-compose.yml              # Full stack: all services + DBs
+├── docker-compose.dev.yml          # Dev overrides (volumes, hot-reload)
+├── .env.example                    # Master env file
+├── pyproject.toml                  # Ruff + shared tool config
+├── Makefile                        # make run-all, make test, make lint
+│
+├── shared/                         # Shared library (pip install -e .)
+│   ├── __init__.py
+│   ├── auth/
+│   │   ├── firebase_admin.py       # Firebase Admin SDK init
+│   │   ├── dependencies.py         # FastAPI Depends: get_current_user
+│   │   └── rbac.py                 # require_role() decorator
+│   ├── models/
+│   │   ├── user.py                 # Shared Pydantic User model
+│   │   └── responses.py            # PaginatedResponse, ApiResponse
+│   ├── database/
+│   │   ├── postgres.py             # asyncpg / SQLAlchemy async engine
+│   │   ├── mongo.py                # Motor (async MongoDB) client
+│   │   └── redis_client.py         # aioredis client
+│   ├── messaging/
+│   │   └── events.py               # Event types, Redis Streams publisher
+│   └── utils/
+│       ├── pagination.py
+│       ├── file_storage.py         # Firebase Storage / S3 upload helpers
+│       └── exceptions.py           # Custom HTTP exceptions
+│
+├── services/
+│   │
+│   ├── auth_service/               # Port 8001
+│   │   ├── app/
+│   │   │   ├── main.py             # FastAPI app instance
+│   │   │   ├── routers/
+│   │   │   │   ├── auth.py         # /auth/verify, /auth/register, /auth/logout
+│   │   │   │   └── users.py        # /users/me, /users/{id} (ADMIN)
+│   │   │   ├── services/
+│   │   │   │   ├── firebase_service.py
+│   │   │   │   └── user_service.py
+│   │   │   ├── schemas/
+│   │   │   │   ├── auth.py         # RegisterRequest, LoginResponse
+│   │   │   │   └── user.py
+│   │   │   └── models/
+│   │   │       └── user.py         # SQLAlchemy User, UserProfile ORM models
+│   │   ├── alembic/                # DB migrations for PostgreSQL
+│   │   ├── tests/
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   │
+│   ├── core_api_service/           # Port 8002
+│   │   ├── app/
+│   │   │   ├── main.py
+│   │   │   ├── routers/
+│   │   │   │   ├── jobs.py
+│   │   │   │   ├── applications.py
+│   │   │   │   ├── kanban.py
+│   │   │   │   ├── profile.py
+│   │   │   │   └── employer.py
+│   │   │   ├── services/
+│   │   │   │   ├── job_service.py
+│   │   │   │   ├── application_service.py
+│   │   │   │   ├── kanban_service.py
+│   │   │   │   ├── profile_service.py
+│   │   │   │   └── employer_service.py
+│   │   │   ├── schemas/
+│   │   │   │   ├── job.py          # JobCreate, JobUpdate, JobResponse
+│   │   │   │   ├── application.py
+│   │   │   │   ├── kanban.py
+│   │   │   │   ├── profile.py
+│   │   │   │   └── employer.py
+│   │   │   └── models/             # Pydantic MongoDB document models
+│   │   ├── tests/
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   │
+│   ├── ai_service/                 # Port 8003
+│   │   ├── app/
+│   │   │   ├── main.py
+│   │   │   ├── routers/
+│   │   │   │   ├── ats.py          # /ai/score-resume, /ai/tasks/{id}
+│   │   │   │   ├── chat.py         # /ai/chat (SSE streaming)
+│   │   │   │   ├── matching.py     # /ai/job-matches
+│   │   │   │   └── parser.py       # /ai/parse-resume
+│   │   │   ├── services/
+│   │   │   │   ├── resume_parser.py    # pdfplumber + python-docx
+│   │   │   │   ├── ats_scorer.py       # spaCy + TF-IDF + semantic sim
+│   │   │   │   ├── job_matcher.py      # sentence-transformers embeddings
+│   │   │   │   └── chat_service.py     # LangChain + OpenAI streaming
+│   │   │   ├── workers/
+│   │   │   │   └── celery_app.py       # Celery worker definition
+│   │   │   ├── prompts/
+│   │   │   │   ├── resume_review.txt
+│   │   │   │   ├── career_advice.txt
+│   │   │   │   └── interview_prep.txt
+│   │   │   └── models/
+│   │   │       └── skill_ontology.json # Curated skill taxonomy
+│   │   ├── tests/
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   │
+│   ├── scraper_service/            # Port 8004
+│   │   ├── app/
+│   │   │   ├── main.py
+│   │   │   ├── routers/
+│   │   │   │   └── scraper.py
+│   │   │   ├── scrapers/
+│   │   │   │   ├── base_scraper.py     # Abstract base class
+│   │   │   │   ├── linkedin_scraper.py # Playwright
+│   │   │   │   ├── indeed_scraper.py   # Playwright + nodriver
+│   │   │   │   ├── naukri_scraper.py   # Playwright
+│   │   │   │   ├── glassdoor_scraper.py
+│   │   │   │   └── timesjobs_scraper.py # Scrapling
+│   │   │   ├── normalizer/
+│   │   │   │   ├── job_normalizer.py   # Raw → standard Job schema
+│   │   │   │   ├── deduplicator.py     # Hash-based dedup (Redis)
+│   │   │   │   └── geo_normalizer.py   # Location → city/country
+│   │   │   ├── scheduler/
+│   │   │   │   └── beat_schedule.py    # Celery Beat schedule
+│   │   │   └── workers/
+│   │   │       └── celery_app.py
+│   │   ├── tests/
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   │
+│   ├── notification_service/       # Port 8005
+│   │   ├── app/
+│   │   │   ├── main.py
+│   │   │   ├── consumers/
+│   │   │   │   └── event_consumer.py   # Redis Streams consumer
+│   │   │   ├── channels/
+│   │   │   │   ├── email_sender.py     # SendGrid
+│   │   │   │   ├── push_sender.py      # Firebase Cloud Messaging
+│   │   │   │   └── ws_manager.py       # WebSocket in-app notifications
+│   │   │   └── templates/
+│   │   │       ├── welcome_candidate.html
+│   │   │       ├── welcome_employer.html
+│   │   │       ├── application_received.html
+│   │   │       └── stage_update.html
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   │
+│   ├── analytics_service/          # Port 8006
+│   │   ├── app/
+│   │   │   ├── main.py
+│   │   │   ├── routers/
+│   │   │   │   ├── employer_analytics.py
+│   │   │   │   ├── candidate_analytics.py
+│   │   │   │   └── admin_analytics.py
+│   │   │   └── aggregators/
+│   │   │       ├── funnel_aggregator.py
+│   │   │       └── skill_demand_aggregator.py
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   │
+│   └── admin_service/              # Port 8007
+│       ├── app/
+│       │   ├── main.py
+│       │   ├── routers/
+│       │   │   ├── users.py            # /admin/users CRUD
+│       │   │   ├── employers.py        # /admin/employers
+│       │   │   ├── companies.py        # /admin/companies
+│       │   │   ├── job_approvals.py    # /admin/job-approvals
+│       │   │   └── platform.py         # /admin/stats, /admin/settings
+│       │   └── services/
+│       │       ├── approval_service.py
+│       │       └── moderation_service.py
+│       ├── Dockerfile
+│       └── requirements.txt
+│
+└── infra/
+    ├── nginx/
+    │   └── nginx.conf              # Upstream routing to each service
+    ├── postgres/
+    │   └── init.sql                # DB creation, initial schema
+    └── redis/
+        └── redis.conf
+```
+
+---
+
+## 11. REST API Contract — Full Route Table
+
+### Auth Service (Port 8001 — `/api/auth`)
+| Method | Endpoint | Role | Description |
+|---|---|---|---|
+| POST | `/auth/register` | PUBLIC | Register with Firebase token + role |
+| POST | `/auth/verify` | PUBLIC | Verify Firebase token, return app user |
+| POST | `/auth/logout` | AUTH | Invalidate session / cache |
+| GET | `/auth/me` | AUTH | Current user info |
+| PUT | `/auth/me` | AUTH | Update display name / photo |
+| GET | `/admin/users` | ADMIN | List all users (paginated) |
+| GET | `/admin/users/{id}` | ADMIN | Single user detail |
+| PATCH | `/admin/users/{id}/role` | ADMIN | Change user role |
+| PATCH | `/admin/users/{id}/status` | ADMIN | Activate / deactivate user |
+
+### Core API Service (Port 8002 — `/api`)
+| Method | Endpoint | Role | Description |
+|---|---|---|---|
+| GET | `/jobs` | PUBLIC | Search + paginated jobs |
+| GET | `/jobs/{id}` | PUBLIC | Job detail |
+| POST | `/jobs` | EMPLOYER | Create job posting |
+| PUT | `/jobs/{id}` | EMPLOYER | Update job |
+| DELETE | `/jobs/{id}` | EMPLOYER/ADMIN | Delete job |
+| PATCH | `/jobs/{id}/status` | ADMIN | Approve/Reject |
+| GET | `/jobs/recommended` | CANDIDATE | AI-matched jobs |
+| POST | `/jobs/{id}/apply` | CANDIDATE | Apply to job |
+| GET | `/employer/jobs` | EMPLOYER | Own jobs |
+| GET | `/employer/jobs/{id}/applicants` | EMPLOYER | Job applicants |
+| GET | `/applications` | CANDIDATE | My applications |
+| PATCH | `/applications/{id}/stage` | CANDIDATE | Move kanban stage |
+| POST | `/applications/{id}/withdraw` | CANDIDATE | Withdraw |
+| GET | `/employer/applications` | EMPLOYER | All applicants |
+| PATCH | `/employer/applications/{id}` | EMPLOYER | Update status |
+| GET | `/kanban` | CANDIDATE | Full kanban board |
+| PUT | `/kanban/move` | CANDIDATE | Move card |
+| POST | `/kanban/save` | CANDIDATE | Save job |
+| GET | `/profile` | CANDIDATE | Own profile |
+| PUT | `/profile` | CANDIDATE | Update profile |
+| POST | `/profile/resume` | CANDIDATE | Upload resume |
+| GET | `/employer/profile` | EMPLOYER | Employer profile |
+| PUT | `/employer/profile` | EMPLOYER | Update employer |
+
+### AI Service (Port 8003 — `/api/ai`)
+| Method | Endpoint | Role | Description |
+|---|---|---|---|
+| POST | `/ai/score-resume` | CANDIDATE | ATS score (async, returns task_id) |
+| GET | `/ai/tasks/{task_id}` | CANDIDATE | Poll task result |
+| POST | `/ai/chat` | CANDIDATE | AI chat (SSE streaming) |
+| GET | `/ai/job-matches` | CANDIDATE | Ranked job matches |
+| POST | `/ai/parse-resume` | CANDIDATE | Resume → structured JSON |
+
+### Scraper Service (Port 8004 — `/api/scraper`)
+| Method | Endpoint | Role | Description |
+|---|---|---|---|
+| POST | `/scraper/trigger` | ADMIN | Trigger scrape for source |
+| GET | `/scraper/jobs` | ADMIN | Scraped jobs queue |
+| POST | `/scraper/approve/{id}` | ADMIN | Approve scraped job |
+| PATCH | `/scraper/reject/{id}` | ADMIN | Reject scraped job |
+| GET | `/scraper/stats` | ADMIN | Scraping run statistics |
+
+---
+
+## 12. Concurrency & Performance Design
+
+### 12.1 Async FastAPI throughout
+```python
+# Every endpoint is async — non-blocking I/O
+@router.get("/jobs")
+async def get_jobs(filters: JobFilter, db: AsyncMotorDatabase = Depends(get_mongo)):
+    async with db["jobs"].find(query).skip(skip).limit(limit) as cursor:
+        jobs = await cursor.to_list(length=limit)
+    return PaginatedResponse(data=jobs, total=total, page=page)
+```
+
+### 12.2 Gunicorn + Uvicorn workers
+```bash
+# Production: Gunicorn manages multiple Uvicorn async workers
+gunicorn app.main:app \
+  --worker-class uvicorn.workers.UvicornWorker \
+  --workers 4 \                    # (2 × CPU cores)
+  --max-requests 1000 \            # worker recycling to prevent memory leaks
+  --timeout 60
+```
+
+### 12.3 Database Connection Pooling
+```python
+# PostgreSQL: asyncpg connection pool
+engine = create_async_engine(
+    DATABASE_URL,
+    pool_size=20,
+    max_overflow=10,
+    pool_pre_ping=True,
+    pool_recycle=3600
+)
+
+# MongoDB: Motor client (async, connection pool built-in)
+motor_client = AsyncIOMotorClient(MONGO_URI, maxPoolSize=50)
+
+# Redis: aioredis connection pool
+redis_pool = aioredis.ConnectionPool.from_url(REDIS_URL, max_connections=20)
+```
+
+### 12.4 Celery Workers (Heavy tasks off main thread)
+```bash
+# AI Worker (GPU-friendly tasks)
+celery -A ai_service.worker worker \
+  --queues=ai_tasks \
+  --concurrency=2 \         # limited by OpenAI rate limits + memory
+  --prefetch-multiplier=1
+
+# Scraper Worker (I/O heavy, more concurrency)  
+celery -A scraper_service.worker worker \
+  --queues=scrape_tasks \
+  --concurrency=6
+
+# Email Worker
+celery -A notification_service.worker worker \
+  --queues=email_queue \
+  --concurrency=4
+```
+
+### 12.5 Caching Strategy
+```python
+# Redis cache decorator (custom)
+@cache(key="jobs:search:{hash(filters)}", ttl=120)  # 2 minutes
+async def search_jobs(filters: JobFilter): ...
+
+@cache(key="job:{job_id}", ttl=600)                 # 10 minutes
+async def get_job_detail(job_id: str): ...
+
+@cache(key="profile:{user_id}", ttl=300)            # 5 minutes
+async def get_candidate_profile(user_id: str): ...
+
+# Cache invalidation on mutation:
+await redis.delete(f"job:{job_id}")
+await redis.delete_pattern("jobs:search:*")
+```
+
+### 12.6 Rate Limiting
+```python
+# Per-endpoint rate limits (FastAPI middleware)
+RATE_LIMITS = {
+    "/api/ai/score-resume": "10/hour",      # AI calls expensive
+    "/api/ai/chat": "30/hour",              # Chat messages
+    "/api/jobs": "100/minute",              # Search
+    "/api/auth/register": "5/hour",         # Anti-spam
+    "/api/jobs/{id}/apply": "20/hour",      # Anti-abuse
+}
+```
+
+---
+
+## 13. Security Design
+
+| Concern | Solution |
+|---|---|
+| Auth | Firebase ID Token (RS256) verification on every request |
+| Token Caching | Redis with 5min TTL to avoid repeated Firebase calls |
+| SQL Injection | SQLAlchemy ORM parameterized queries |
+| NoSQL Injection | Pydantic schema validation before any DB query |
+| CORS | Strict allowlist: only frontend domains |
+| Rate Limiting | Redis sliding window per IP + per user |
+| File Upload | MIME type validation, size limit (5MB), virus scan |
+| Scraper | IP rotation, user-agent rotation, respect robots.txt |
+| Secrets | Environment variables, never committed (python-decouple) |
+| HTTPS | TLS via Nginx / Traefik (Let's Encrypt) |
+| Audit Log | All admin actions logged to PostgreSQL audit_logs |
+
+---
+
+## 14. Android App Compatibility
+
+The REST API is **100% compatible** with Android. No protocol changes needed:
+
+```
+Android (Kotlin / Retrofit) → Firebase getIdToken() → 
+  → Authorization: Bearer <token> → Same Backend APIs
+  
+Additional endpoints for Android:
+  POST /auth/fcm-token          → Register device FCM token for push
+  GET  /notifications/inbox     → In-app notifications
+  POST /notifications/{id}/read → Mark as read
+  
+Android-specific headers:
+  X-Platform: android
+  X-App-Version: 1.0.0
+```
+
+---
+
+## 15. Phase-wise Execution Plan
+
+| Phase | Duration | Scope | Deliverable |
+|---|---|---|---|
+| **Phase 0 — Setup** | Week 1 | Docker, shared lib, CI/CD, .env, DB schemas | All services boot, Docker Compose runs |
+| **Phase 1 — Auth** | Week 1–2 | Auth Service: register, verify, RBAC, user CRUD | Firebase login works end-to-end |
+| **Phase 2 — Core API** | Week 2–4 | Jobs CRUD, Applications, Kanban, Profiles | Frontend fully connected |
+| **Phase 3 — AI Service** | Week 4–5 | ATS scorer, resume parser, job matching | AI Hub page functional |
+| **Phase 4 — Scraper** | Week 5–6 | Playwright scrapers for 3 sources, normalizer | 500+ jobs ingested |
+| **Phase 5 — Notifications** | Week 6 | Email (SendGrid), FCM push | Candidate notified on stage change |
+| **Phase 6 — Analytics** | Week 7 | Employer dashboard data, admin platform stats | Analytics pages working |
+| **Phase 7 — Admin** | Week 7 | Admin service: approvals, user mgmt | Super admin panel functional |
+| **Phase 8 — Android** | Week 8+ | Android-specific endpoints, FCM, device auth | Android app connected |
+| **Phase 9 — Scale** | Ongoing | Load testing, caching tuning, DB indexing | 1000+ concurrent users |
+
+---
+
+## 16. Docker Compose (Full Stack)
+
+```yaml
+version: "3.9"
+services:
+  nginx:
+    image: nginx:alpine
+    ports: ["80:80", "443:443"]
+    depends_on: [auth, core, ai, scraper]
+
+  auth:
+    build: ./services/auth_service
+    ports: ["8001:8001"]
+    environment: [POSTGRES_URL, REDIS_URL, FIREBASE_CREDS]
+    depends_on: [postgres, redis]
+
+  core:
+    build: ./services/core_api_service
+    ports: ["8002:8002"]
+    environment: [MONGO_URL, REDIS_URL, AUTH_SERVICE_URL]
+    depends_on: [mongo, redis]
+
+  ai:
+    build: ./services/ai_service
+    ports: ["8003:8003"]
+    environment: [OPENAI_API_KEY, MONGO_URL, REDIS_URL]
+    depends_on: [mongo, redis]
+
+  scraper:
+    build: ./services/scraper_service
+    ports: ["8004:8004"]
+    environment: [MONGO_URL, REDIS_URL, PROXY_LIST]
+    depends_on: [mongo, redis]
+
+  notification:
+    build: ./services/notification_service
+    ports: ["8005:8005"]
+    environment: [SENDGRID_KEY, FIREBASE_CREDS, REDIS_URL]
+
+  analytics:
+    build: ./services/analytics_service
+    ports: ["8006:8006"]
+
+  admin:
+    build: ./services/admin_service
+    ports: ["8007:8007"]
+
+  postgres:
+    image: postgres:16-alpine
+    environment: [POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+
+  mongo:
+    image: mongo:7
+    volumes: [mongo_data:/data/db]
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+
+  celery_ai:
+    build: ./services/ai_service
+    command: celery -A app.worker worker -Q ai_tasks -c 2
+
+  celery_scraper:
+    build: ./services/scraper_service
+    command: celery -A app.worker worker -Q scrape_tasks -c 6
+
+  celery_beat:
+    build: ./services/scraper_service
+    command: celery -A app.worker beat --loglevel=info
+
+volumes:
+  postgres_data:
+  mongo_data:
+```
+
+---
+
+## 17. Key Python Libraries per Service
+
+| Service | Key Libraries |
+|---|---|
+| **All services** | `fastapi`, `uvicorn`, `pydantic v2`, `python-decouple`, `httpx` |
+| **Auth** | `firebase-admin`, `sqlalchemy[asyncio]`, `asyncpg`, `alembic` |
+| **Core API** | `motor` (async MongoDB), `aioredis`, `python-multipart` |
+| **AI Service** | `openai`, `langchain`, `spacy`, `sentence-transformers`, `pdfplumber`, `python-docx`, `scikit-learn`, `celery` |
+| **Scraper** | `playwright`, `nodriver`, `scrapling`, `celery`, `apscheduler`, `beautifulsoup4`, `selectolax` |
+| **Notifications** | `sendgrid`, `firebase-admin`, `jinja2`, `celery`, `websockets` |
+| **All** | `pytest`, `pytest-asyncio`, `httpx` (testing), `ruff`, `pre-commit` |
+
+---
+
+## 18. Open Questions / Design Decisions for Review
+
+> [!IMPORTANT]
+> **Q1: Scraping Legal Compliance** — LinkedIn and Indeed prohibit scraping in their ToS. 
+> Recommended: use official LinkedIn Jobs API (requires partner approval) for LinkedIn,
+> and/or use only sources that permit scraping. Please confirm which job boards to scrape.
+
+> [!IMPORTANT]
+> **Q2: Database Hosting** — For production, do you want:
+> - **Self-hosted** (docker on VPS) — lower cost, more ops work
+> - **Managed cloud** (MongoDB Atlas + AWS RDS + Redis Cloud) — higher cost, zero ops
+> - **Hybrid** — managed DBs, self-hosted services
+
+> [!IMPORTANT]
+> **Q3: AI Costs** — OpenAI GPT-4o API calls for ATS scoring and chat will incur per-token costs.
+> Should we implement a **free tier** (N AI calls/month per user) and **premium tier** (unlimited)?
+> Or is AI free for all users initially?
+
+> [!NOTE]
+> **Q4: Employer Verification** — When an employer registers, should they be:
+> A) Auto-approved (can post jobs immediately)
+> B) Manually verified by admin before posting
+> C) Email domain verification (match company domain)
+
+> [!NOTE]  
+> **Q5: Salary Currency** — Should salary be stored in a single currency (INR) or multi-currency with conversion?
+
+---
+
+## 19. Verification Plan
+
+### Automated Tests
+```bash
+# Unit tests per service
+pytest services/auth_service/tests/ -v
+pytest services/core_api_service/tests/ -v
+pytest services/ai_service/tests/ -v
+
+# Integration tests (Docker Compose up + httpx)
+pytest tests/integration/ -v --env=docker
+
+# Load testing (concurrent requests)
+locust -f tests/load/locustfile.py --host=http://localhost --users=100 --spawn-rate=10
+```
+
+### Manual Verification Checklist
+- [ ] Firebase Google Sign-In → backend verifies → role assigned correctly
+- [ ] CANDIDATE cannot access `/employer/*` endpoints (403 returned)
+- [ ] EMPLOYER cannot apply to jobs (403 returned)  
+- [ ] Job posting by EMPLOYER → status PENDING → ADMIN approves → status APPROVED → visible to candidates
+- [ ] ATS score endpoint accepts PDF/DOCX, returns structured score
+- [ ] Kanban drag-and-drop persists to MongoDB
+- [ ] Scraper runs on schedule, deduplicates correctly
+- [ ] 100 concurrent requests to `/api/jobs` complete in < 500ms (Redis cached)
+- [ ] FCM push notification received on Android device on stage change

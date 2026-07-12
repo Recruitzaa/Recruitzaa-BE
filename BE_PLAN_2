@@ -1,0 +1,1233 @@
+# Recruitzaa — Backend Architecture Plan (v2 — Revised & Final)
+
+> **Authored by**: Senior Backend Architect (10 YOE)  
+> **Stack**: Python FastAPI · Microservices · Kafka · MongoDB + PostgreSQL + Redis  
+> **Auth**: Firebase Admin SDK + RBAC (CANDIDATE / EMPLOYER / SUPER_ADMIN)  
+> **Scraping**: Playwright (isolated Celery workers) + Scrapling  
+> **AI**: Hybrid — Offline (Ollama/Llama) + Paid (OpenAI) with token optimization  
+> **Observability**: Prometheus + Grafana + Loki + Tempo  
+> **Storage**: MinIO (self-hosted S3-compatible, runs on VPS)  
+> **Deployment**: Docker Compose on VPS (self-hosted)  
+> **Android**: Same REST APIs consumed by Android client  
+
+---
+
+## ✅ Decisions Locked (All Feedback Resolved)
+
+| Topic | Decision |
+|---|---|
+| Messaging | **Apache Kafka** (enterprise-grade, durable, replayable) |
+| File Storage | **MinIO** (self-hosted S3-compatible on VPS) — migrates to AWS S3 later |
+| DB Hosting | **Self-hosted** (Docker on VPS) for now |
+| AI Strategy | **Hybrid**: Ollama (offline, free) + OpenAI GPT-4o (paid, premium tasks) |
+| AI Context | Sliding window + summarization to **minimize token costs** |
+| Scraping | **Company career pages only** (Playwright/Scrapling) + public job APIs |
+| Playwright | Runs in **isolated Celery workers** — NOT inside FastAPI event loop |
+| Email | **Resend** (3000 emails/month free) or Brevo — free tiers |
+| Employer Verify | **All 3**: email domain → admin manual review → approved (multi-step) |
+| Salary | **Multi-currency** (ISO 4217 + Frankfurter API for rates) |
+| Observability | **Prometheus + Grafana + Loki + Tempo** (full PLG stack) |
+| Docker | **YES** — Docker Compose for dev + prod VPS |
+
+---
+
+## 1. High-Level Architecture (v2)
+
+```
+┌───────────────────────────────────────────────────────────────────────────────────┐
+│                        RECRUITZAA — ENTERPRISE BACKEND (v2)                        │
+│                                                                                    │
+│  ┌─────────────┐  ┌──────────────┐                                                │
+│  │  React SPA  │  │  Android App │                                                │
+│  └──────┬──────┘  └──────┬───────┘                                               │
+│         └────────────────┘                                                         │
+│                    │ HTTPS                                                          │
+│                    ▼                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐  │
+│  │                    NGINX (Reverse Proxy + TLS)                               │  │
+│  │              Rate Limiting · CORS · TLS Termination                          │  │
+│  └──────┬──────────┬──────────┬──────────┬──────────┬──────────┬───────────────┘  │
+│         │          │          │          │          │          │                   │
+│    ┌────▼───┐ ┌────▼───┐ ┌───▼────┐ ┌───▼───┐ ┌───▼────┐ ┌───▼────┐            │
+│    │ Auth   │ │ Core   │ │  AI    │ │Scraper│ │Notif.  │ │Analytics│            │
+│    │Service │ │  API   │ │Service │ │ API   │ │Service │ │Service  │            │
+│    │ :8001  │ │ :8002  │ │ :8003  │ │ :8004 │ │ :8005  │ │  :8006  │            │
+│    └────┬───┘ └────┬───┘ └───┬────┘ └───┬───┘ └───┬────┘ └───┬────┘            │
+│         └──────────┴──────────┴──────────┴──────────┴──────────┘                  │
+│                                    │                                               │
+│                    ┌───────────────▼──────────────────┐                           │
+│                    │         APACHE KAFKA               │                          │
+│                    │  Topics:                           │                          │
+│                    │  user.events · job.events          │                          │
+│                    │  application.events · ai.tasks     │                          │
+│                    │  scrape.jobs · notification.send   │                          │
+│                    │  analytics.events                  │                          │
+│                    └──────────┬───────────────────────┘                           │
+│                               │                                                    │
+│         ┌─────────────────────┼─────────────────────────────┐                    │
+│         │                     │                             │                      │
+│    ┌────▼───┐           ┌─────▼──────┐              ┌───────▼──────┐             │
+│    │Celery  │           │  Celery    │              │   Celery     │             │
+│    │AI      │           │  Scraper   │              │   Email/Push │             │
+│    │Workers │           │  Workers   │              │   Workers    │             │
+│    │(Ollama │           │(Playwright │              │              │             │
+│    │+OpenAI)│           │+ Scrapling)│              │              │             │
+│    └────────┘           └────────────┘              └──────────────┘             │
+│                                                                                    │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐ │
+│  │  PostgreSQL  │  │   MongoDB    │  │    Redis     │  │    MinIO             │ │
+│  │  (Users/Auth │  │  (Jobs/Apps/ │  │  (Cache +    │  │  (Self-hosted S3)    │ │
+│  │  Analytics/  │  │  AI/Kanban/  │  │   Rate Limit)│  │  Resumes, Logos,     │ │
+│  │  Audit)      │  │  Chat/Scrape)│  │              │  │  Job Assets          │ │
+│  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────────────┘ │
+│                                                                                    │
+│  ┌──────────────────────────────────────────────────────────────────────────────┐ │
+│  │             OBSERVABILITY STACK (PLG + Prometheus)                            │ │
+│  │  Prometheus (metrics) · Grafana (dashboards) · Loki (logs) · Tempo (traces)  │ │
+│  └──────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                    │
+│  ┌────────────────────┐                                                            │
+│  │  Admin Service     │  (SUPER_ADMIN only — internal network only)               │
+│  │  :8007             │                                                            │
+│  └────────────────────┘                                                            │
+└───────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 2. Why Kafka over Redis Streams
+
+| Feature | Redis Streams | Apache Kafka |
+|---|---|---|
+| Message durability | In-memory (can lose on crash) | Disk-persisted (replayable) |
+| Throughput | Good | Excellent (millions/sec) |
+| Consumer groups | Basic | Rich (offsets, partitions) |
+| Message replay | Limited | ✅ Full replay from any offset |
+| Ecosystem | - | ✅ Kafka Connect, Kafka Streams |
+| Retention | TTL-based | Configurable (days/forever) |
+| Ops complexity | Low | Medium (use Confluent/KRaft mode) |
+
+**Decision:** Use Kafka with **KRaft mode** (no Zookeeper needed since Kafka 3.x).  
+Single-broker for dev/MVP → expand to 3 brokers for production.
+
+```
+Kafka Topics:
+  user.registered          → Notification consumers
+  user.role.changed        → Audit + notification
+  job.created              → Analytics + AI (compute embeddings)
+  job.approved             → Notification (notify employer) + Search index update
+  job.scraped              → Admin review queue
+  application.created      → Employer notification + Analytics
+  application.stage.moved  → Candidate notification + Analytics
+  ai.score.request         → AI worker picks up
+  ai.score.completed       → Core API updates MongoDB
+  notification.email       → Email worker
+  notification.push        → FCM push worker
+  analytics.event          → Analytics aggregator
+```
+
+---
+
+## 3. Why Docker? (And How)
+
+**Yes, absolutely use Docker.** Here is why and how:
+
+### Why Docker for Recruitzaa
+- 7+ services + 3 databases + Kafka + MinIO + Observability stack = 15+ processes
+- Without Docker: manually installing, configuring, and running all these is a nightmare
+- With Docker: one `docker compose up` starts everything
+- Identical environments: dev machine = VPS prod (no "works on my machine")
+- Easy scaling: just bump `replicas:` when traffic grows
+- Portability: move to any VPS provider (Hetzner, DigitalOcean, etc.)
+
+### Docker Strategy
+```
+Development:  docker-compose.yml + docker-compose.override.yml
+              (hot-reload via volume mounts, debugger ports exposed)
+
+Production:   docker-compose.prod.yml
+              (no volume mounts, env from .env.prod, restart policies)
+
+CI/CD:        GitHub Actions → build images → push to GHCR → SSH deploy to VPS
+```
+
+---
+
+## 4. Observability Stack — Grafana + Prometheus + Loki + Tempo
+
+**Yes, excellent production choice.** This is the industry standard PLG stack.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    OBSERVABILITY STACK                           │
+│                                                                  │
+│  FastAPI Service          Prometheus              Grafana        │
+│  (all 7 services)  ──▶   (scrapes /metrics)  ──▶ (dashboards)  │
+│  + prometheus-            stores time-series      pre-built      │
+│    fastapi-               metrics                 FastAPI boards │
+│    instrumentator                                                 │
+│                                                                  │
+│  All containers  ──▶   Promtail  ──▶  Loki  ──▶  Grafana       │
+│  (stdout logs)         (log agent)  (log store)  (log search)   │
+│                                                                  │
+│  OpenTelemetry   ──▶              Tempo  ──▶  Grafana           │
+│  (traces from              (distributed   (trace viewer)        │
+│   all services)             trace store)                         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### What You Get
+| Tool | What it shows |
+|---|---|
+| **Prometheus** | Request rate, latency, error rate, DB pool usage, Kafka lag per service |
+| **Grafana** | Dashboards: per-service health, Kanban activity, AI task queue depth |
+| **Loki** | Centralized log search across all 7 services (Google-like log search) |
+| **Tempo** | Full distributed trace: "this /jobs request took 320ms — 200ms was MongoDB" |
+
+### FastAPI Integration (zero-code mostly)
+```python
+# Every FastAPI service adds this — done:
+from prometheus_fastapi_instrumentator import Instrumentator
+Instrumentator().instrument(app).expose(app)
+# → Exposes /metrics endpoint, Prometheus scrapes it every 15s
+```
+
+---
+
+## 5. Microservices (Revised)
+
+| Service | Port | Responsibility |
+|---|---|---|
+| **Auth Service** | 8001 | Firebase verify, RBAC, user CRUD, role assignment |
+| **Core API** | 8002 | Jobs, Applications, Kanban, Profiles, Employer workflows |
+| **AI Service** | 8003 | ATS score (API only — workers do heavy lifting), chat, matching, parse |
+| **Scraper API** | 8004 | Trigger/monitor scraping jobs (API only — Celery workers scrape) |
+| **Notification Service** | 8005 | Email (Resend), FCM push (Android/Web), in-app WebSocket |
+| **Analytics Service** | 8006 | Employer funnel, candidate insights, admin platform stats |
+| **Admin Service** | 8007 | SUPER_ADMIN: user mgmt, job approvals, employer verification |
+
+### Celery Worker Pools (separate processes, NOT inside FastAPI)
+| Worker | Queue | Concurrency | Tools |
+|---|---|---|---|
+| `celery_ai` | `ai_tasks` | 2 | Ollama, OpenAI, spaCy, sentence-transformers |
+| `celery_scraper` | `scrape_tasks` | 4 | Playwright (own process), Scrapling |
+| `celery_email` | `email_queue` | 8 | Resend, Jinja2 |
+| `celery_push` | `push_queue` | 8 | Firebase Cloud Messaging |
+| `celery_beat` | scheduler | 1 | APScheduler triggers (scrape crons) |
+
+---
+
+## 6. Database Architecture (Revised)
+
+### 6.1 PostgreSQL — Relational, ACID Critical
+```sql
+users            (id UUID PK, firebase_uid UNIQUE, email, role, is_active, created_at)
+user_profiles    (user_id FK, display_name, phone, photo_url, location, bio)
+companies        (id UUID, name, slug UNIQUE, website, domain, logo_url, verified, plan_tier)
+employers        (id UUID, user_id FK, company_id FK, job_title, department, verification_status)
+employer_verification (id, employer_id, step: 'EMAIL_DOMAIN'|'PENDING_REVIEW'|'APPROVED'|'REJECTED', 
+                       admin_note, updated_at)
+subscriptions    (id, company_id, plan, currency, start_date, end_date, is_active)
+audit_logs       (id, user_id, action, resource_type, resource_id, ip_address, user_agent, timestamp)
+job_approvals    (id, job_id, admin_id, action, note, created_at)
+analytics_events (id UUID, user_id, event_type VARCHAR(60), payload JSONB, timestamp)
+exchange_rates   (base_currency, target_currency, rate, updated_at)  -- refreshed daily
+```
+
+### 6.2 MongoDB — Document Store
+```javascript
+jobs {
+  _id, title, company_name, company_id, location: { city, country, coords },
+  salary: { min, max, currency: "INR"|"USD"|"GBP", negotiable },
+  job_type, work_mode, description, requirements[], tags[], skills_required[],
+  posted_at, expires_at, status: "PENDING"|"APPROVED"|"REJECTED"|"EXPIRED",
+  employer_id, applicants_count, is_scraped, source_url, embeddings: [float]
+}
+
+applications {
+  _id, job_id, candidate_id, employer_id, 
+  stage: "SAVED"|"APPLIED"|"SCREENING"|"INTERVIEW"|"OFFER"|"REJECTED",
+  applied_at, resume_url, cover_letter, ats_score_ref,
+  stage_history: [{ stage, timestamp, changed_by }],
+  employer_notes: [{ note, added_by, timestamp }],
+  timeline: [{ event, timestamp }]
+}
+
+kanban_boards {
+  _id, candidate_id,
+  columns: {
+    SAVED: [{ job_id, added_at, notes }],
+    APPLIED: [...], SCREENING: [...], INTERVIEW: [...], OFFER: [...], REJECTED: [...]
+  }
+}
+
+candidate_profiles {
+  _id, user_id, headline, bio, skills[{ name, level, years }],
+  experience[{ title, company, start, end, description, is_current }],
+  education[{ degree, institution, year }], certifications[],
+  resume_versions[{ url, filename, uploaded_at, is_primary }],
+  preferred_job_types[], preferred_locations[], 
+  salary_expectation: { min, max, currency },
+  profile_completion_pct, availability, languages[]
+}
+
+employer_profiles {
+  _id, company_id, about, industry, team_size, 
+  culture[], benefits[], office_photos_urls[], social_links{},
+  headquarters: { city, country }
+}
+
+ai_results {
+  _id, user_id, job_id, resume_url, 
+  ats_score: { overall, skill_match, experience_fit, keyword_density, formatting,
+               keywords[{ keyword, found }], suggestions[] },
+  model_used, computed_at, tokens_used
+}
+
+chat_sessions {
+  _id, user_id, session_type: "resume_review"|"career_advice"|"interview_prep",
+  context_summary,    // compressed summary of older messages (token savings)
+  recent_messages: [{ role, content, timestamp }],  // last 10 messages only
+  full_message_count, created_at, updated_at
+}
+
+scraped_jobs {
+  _id, source_name, source_url, raw_text, normalized{},
+  scraped_at, processed: bool, job_id, dedup_hash
+}
+```
+
+### 6.3 Redis — Cache + Rate Limiting + Celery Broker
+```
+Token cache:     firebase:token:{hash}  → user obj (TTL 5min)
+Job search:      jobs:search:{hash}     → results (TTL 2min)
+Job detail:      job:{id}               → job doc (TTL 10min)
+Profile cache:   profile:{user_id}      → profile (TTL 5min)
+Rate limits:     ratelimit:{ip}:{route} → counter (sliding window)
+Dedup set:       scrape:dedup           → set of hashes (job dedup)
+Celery broker:   (built-in Celery Redis backend)
+```
+
+---
+
+## 7. Authentication & RBAC (Revised)
+
+### 7.1 Firebase → Backend Flow
+```
+Client (Web/Android) → Firebase.getIdToken() → Bearer <token>
+         │
+         ▼
+  Auth Service: shared FastAPI dependency
+         │
+         ├── 1. Check Redis cache (TTL 5min) → HIT: return cached user
+         │
+         ├── 2. MISS: firebase_admin.auth().verify_id_token(token)
+         │
+         ├── 3. Fetch user from PostgreSQL by firebase_uid
+         │
+         └── 4. Cache in Redis → return AppUser { id, email, role, permissions[] }
+```
+
+### 7.2 Shared Auth Dependency (all services import this)
+```python
+# shared/auth/dependencies.py
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> AppUser:
+    ...  # Redis cache → Firebase verify → PostgreSQL lookup
+
+async def require_role(*roles: UserRole):
+    def dependency(user = Depends(get_current_user)):
+        if user.role not in roles:
+            raise HTTPException(403)
+    return dependency
+
+# Usage in any service:
+@router.post("/jobs")
+async def create_job(user = Depends(require_role("EMPLOYER", "SUPER_ADMIN"))):
+    ...
+```
+
+### 7.3 Employer Verification (All 3 Steps)
+```
+STEP 1 — Email Domain Check (automated, instant)
+  Employer registers → extract domain from email
+  Known company domain? (e.g. @tcs.com) → flag as "trusted_domain"
+  Unknown domain? → proceed to Step 2
+
+STEP 2 — Admin Manual Review (human in the loop)
+  employer_verification record created → status: PENDING_REVIEW
+  Admin sees notification in /admin/employers queue
+  Admin can: APPROVE (with note) | REJECT (with reason)
+  Kafka event → employer notified of decision via email
+
+STEP 3 — Post-Approval Constraints
+  APPROVED employers can post jobs (status: PENDING job approval)
+  Job still goes through ADMIN job approval before going live
+  REJECTED employers cannot post until re-verified
+
+Combined States:
+  employer.verification_status: 
+    EMAIL_DOMAIN_TRUSTED → can post immediately
+    PENDING_REVIEW       → cannot post, waiting admin
+    APPROVED             → can post (jobs still need approval)
+    REJECTED             → cannot post, reason shown
+```
+
+---
+
+## 8. AI Service — Token Optimization & Hybrid Model (Revised)
+
+### 8.1 Hybrid Model Router
+```
+Task                      Model                  Why
+──────────────────────────────────────────────────────────────
+Resume text parsing       Ollama (Llama 3.1 8B)  Free, fast, private
+ATS keyword extraction    Ollama (Llama 3.1 8B)  Free, local inference
+ATS scoring computation   Offline (TF-IDF/spaCy) Pure NLP, no LLM
+Job matching embeddings   sentence-transformers  Free, local model
+AI Chat (basic)           Ollama (Llama 3.1 8B)  Free, adequate quality
+AI Chat (premium)         OpenAI GPT-4o          Paid, best quality
+Resume summary/advice     OpenAI GPT-4o-mini     Cheaper GPT-4 tier
+Interview prep            OpenAI GPT-4o          Best for complex tasks
+```
+
+### 8.2 Token Saving Strategies for AI Chat
+
+```
+Strategy 1 — Sliding Window Context
+  Keep only the last 10 messages in MongoDB recent_messages[]
+  Older messages are discarded from active context
+  
+Strategy 2 — Automatic Context Summarization
+  When session exceeds 10 messages:
+    → Summarize older messages using Ollama (free!)
+    → Store summary in chat_sessions.context_summary
+    → Next API call: system prompt = summary + last 10 msgs
+    → Old messages removed from active context
+  
+Strategy 3 — System Prompt Caching (OpenAI feature)
+  Long system prompts (resume + JD) are cached by OpenAI
+  Repeated calls with same system prompt cost 50% less
+  
+Strategy 4 — Model Tier Routing
+  Simple "what's my ATS score?" → Ollama (free)
+  Complex "rewrite my resume for this role" → GPT-4o-mini
+  Deep analysis "explain how I compare to industry standards" → GPT-4o
+
+Strategy 5 — Per-User Daily Token Budget
+  Track tokens_used per user per day in Redis
+  Route to cheaper/offline model when approaching limit
+  Show "AI credits" remaining in UI
+
+Result: ~70-80% reduction in paid API token costs
+```
+
+### 8.3 AI Chat API Design (SSE Streaming)
+```
+POST /api/ai/chat
+Body: {
+  "session_id": "abc123",
+  "message": "How can I improve my resume?",
+  "context_type": "resume_review" | "career_advice" | "interview_prep"
+}
+
+Headers: Accept: text/event-stream  (SSE)
+
+Response stream:
+  data: {"token": "Here"}
+  data: {"token": " are"}
+  data: {"token": " 3 suggestions..."}
+  data: {"type": "done", "tokens_used": 312, "model": "gpt-4o-mini"}
+
+Context building (internal):
+  1. Fetch chat_sessions by session_id
+  2. Build messages array: [system_prompt] + [context_summary?] + recent_messages[-10:]
+  3. Route to model based on context_type + user tier
+  4. Stream response to client
+  5. After stream complete: append to recent_messages[], update context if > 10 msgs
+```
+
+---
+
+## 9. Scraper Service (Revised — Company Career Pages Only)
+
+### 9.1 Revised Scraping Philosophy
+Major platforms (LinkedIn, Indeed, Naukri, Glassdoor) **aggressively block scrapers**:
+- IP bans within minutes
+- CAPTCHAs, JS challenges (Cloudflare)
+- Legal ToS violations
+- **Not worth the maintenance cost**
+
+**Revised strategy:**
+| Source Type | Method | Scale |
+|---|---|---|
+| Company career pages | Playwright (configurable templates) | High — add any company |
+| Adzuna API | HTTP REST (free 1000 calls/day) | ~50K jobs indexed |
+| Jooble API | HTTP REST (free partner access) | Aggregator, global jobs |
+| RemoteOK API | HTTP REST (free) | Remote jobs |
+| RSS feeds | XML parser (no browser needed) | Many companies offer this |
+| Employer direct posting | Your own platform | Most controlled |
+
+### 9.2 Company Career Page Scraper — How It Works
+
+```
+Admin adds a company career page:
+  URL: "https://careers.infosys.com/jobs"
+  Template: "infosys_v1"  (CSS selectors config)
+
+Celery Beat triggers scrape_task every 24 hours
+         │
+         ▼
+Playwright Worker (ISOLATED PROCESS — not in FastAPI)
+  ├── Launches Chromium (headless)
+  ├── Navigates to careers URL
+  ├── Waits for job cards to load (explicit waits, not sleep)
+  ├── Extracts: title, location, type, description URL
+  ├── For each job: fetch detail page → extract full description
+  └── Returns raw job list
+         │
+         ▼
+Normalizer Pipeline
+  ├── Clean text (strip HTML, normalize whitespace)
+  ├── Dedup: SHA256(title+company+location) → check Redis set
+  ├── spaCy NLP: extract skills, experience level from description
+  ├── Normalize location → city + country + ISO code
+  ├── Normalize salary → detect currency, convert to multi-currency
+  └── Status: PENDING_APPROVAL
+         │
+         ▼
+Kafka → job.scraped topic → Admin Service consumer
+                              Admin reviews in /admin/job-approvals
+                              APPROVE → status: APPROVED → live on platform
+                              REJECT → discarded
+```
+
+### 9.3 Why Playwright in Separate Process (Not FastAPI)
+
+FastAPI runs on `uvicorn` which has its own `asyncio` event loop.  
+Playwright's async API requires **its own event loop context**.  
+Running `playwright` directly inside a FastAPI endpoint causes:
+- Event loop conflicts → `RuntimeError: This event loop is already running`
+- Blocking the API server while browser loads pages
+- Memory leaks if browser contexts aren't properly managed
+
+**Solution:** Playwright runs **only inside Celery workers** (separate processes):
+```python
+# celery_scraper/workers/playwright_worker.py
+# This is NOT a FastAPI file — it's a Celery task
+
+from playwright.sync_api import sync_playwright  # Sync API in Celery workers
+
+@celery_app.task(name="scrape_company_careers")
+def scrape_company_careers(company_config: dict) -> list[dict]:
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(company_config["url"])
+        # ... scraping logic
+        browser.close()
+    return jobs_list
+
+# Scraper API just triggers and monitors:
+@router.post("/scraper/trigger")
+async def trigger_scrape(company_id: str, admin = Depends(require_role("SUPER_ADMIN"))):
+    task = scrape_company_careers.delay(company_config)
+    return {"task_id": task.id}
+```
+
+---
+
+## 10. File Storage — MinIO (Self-Hosted S3)
+
+### Why MinIO
+- Runs as a Docker container on your VPS
+- S3-compatible API → same boto3/s3fs code works if you later migrate to AWS S3
+- Web UI at port 9001 for browsing files
+- Object storage: files stored by key, not filesystem path
+- Free, open source, production-ready (used by Slack, Verizon, etc.)
+
+### MinIO Buckets
+```
+recruitzaa-resumes/     → candidate resume PDFs/DOCXs
+  {user_id}/{timestamp}_{filename}.pdf
+  
+recruitzaa-logos/       → company logos, employer profile photos
+  companies/{company_id}/logo.png
+  
+recruitzaa-photos/      → candidate avatar images
+  candidates/{user_id}/avatar.jpg
+  
+recruitzaa-exports/     → generated PDF reports, analytics exports
+  exports/{job_id}/applicant_report_{date}.pdf
+```
+
+### File Upload Flow
+```
+Client uploads resume:
+  POST /api/profile/resume (multipart/form-data, max 5MB, PDF/DOCX only)
+         │
+         ▼
+  Core API validates: file type, size, MIME sniff
+         │
+         ▼
+  Upload to MinIO: recruitzaa-resumes/{user_id}/{timestamp}_{name}.pdf
+         │
+         ▼
+  Store URL in MongoDB: candidate_profiles.resume_versions[]
+         │
+         ▼
+  Kafka event → ai.parse.request → AI worker parses resume → auto-fill profile
+```
+
+---
+
+## 11. Notification Service (Revised)
+
+### Email — Resend (Free Tier: 3000/month)
+```
+Free tier: 3,000 emails/month — adequate for MVP
+Paid tier:  $20/month = 50,000 emails — when scaling
+
+Alternatives:
+  Brevo (Sendinblue): 300 emails/day free
+  Mailgun: 1000/month free
+  AWS SES: $0.10 per 1000 (cheapest at scale)
+  Self-hosted Postal: free but high ops cost
+```
+
+### Email Templates (Jinja2 HTML)
+```
+welcome_candidate.html      → On CANDIDATE registration
+welcome_employer.html       → On EMPLOYER registration
+employer_verified.html      → When employer is approved/rejected
+job_approved.html           → Employer: job is live
+application_received.html   → Employer: new application
+stage_update.html           → Candidate: stage changed
+```
+
+### Push Notifications (Firebase Cloud Messaging)
+```
+Works for: Android app + Web PWA
+Events:
+  New job match found       → "New job matching your skills: Senior Dev at TCS"
+  Application stage update  → "Your application at Infosys moved to Interview 🎉"
+  Employer replied          → "Infosys added a note to your application"
+
+Android setup:
+  POST /api/auth/fcm-token  → Register device FCM token
+  Token stored in PostgreSQL user_fcm_tokens table
+```
+
+### In-App Notifications (WebSocket)
+```
+WebSocket endpoint: ws://api/notifications/ws?token=<firebase_token>
+Real-time delivery while user is online
+Falls back to FCM push if user is offline
+```
+
+---
+
+## 12. Multi-Currency Salary
+
+```python
+# stored in MongoDB jobs collection:
+salary: {
+  "min": 80000,
+  "max": 120000, 
+  "currency": "INR",  # ISO 4217
+  "display": "₹80K – ₹1.2L/month",
+  "usd_equivalent_min": 960,  # for sorting/comparison
+  "usd_equivalent_max": 1440
+}
+
+# Exchange rates fetched daily from Frankfurter API (free, no key needed):
+# GET https://api.frankfurter.app/latest?from=INR&to=USD,GBP,EUR,AED
+# Stored in PostgreSQL exchange_rates table
+# Used for: salary range filters work across currencies
+```
+
+---
+
+## 13. Revised Project Directory Structure
+
+```
+recruitzaa-be/
+│
+├── docker-compose.yml             # All services: dev
+├── docker-compose.prod.yml        # Production overrides
+├── .env.example                   # All env vars documented
+├── Makefile                       # make up, make down, make test, make logs
+├── pyproject.toml                 # Ruff linting config (already exists)
+├── .pre-commit-config.yaml        # Hooks (already exists)
+│
+├── shared/                        # Installed as local package (pip install -e ./shared)
+│   ├── pyproject.toml
+│   ├── auth/
+│   │   ├── firebase_admin.py      # Firebase Admin SDK init (singleton)
+│   │   ├── dependencies.py        # get_current_user, require_role FastAPI deps
+│   │   └── rbac.py                # UserRole enum, permission checks
+│   ├── database/
+│   │   ├── postgres.py            # asyncpg + SQLAlchemy async engine factory
+│   │   ├── mongo.py               # Motor async client factory
+│   │   └── redis_client.py        # aioredis connection pool factory
+│   ├── messaging/
+│   │   ├── kafka_producer.py      # AIOKafka async producer
+│   │   ├── kafka_consumer.py      # AIOKafka async consumer base class
+│   │   └── topics.py              # Topic name constants
+│   ├── storage/
+│   │   └── minio_client.py        # MinIO boto3-compatible client
+│   ├── models/
+│   │   ├── user.py                # Shared Pydantic AppUser, UserRole
+│   │   └── responses.py           # PaginatedResponse[T], ApiResponse[T]
+│   └── utils/
+│       ├── pagination.py          # Page/limit helpers
+│       ├── cache.py               # Redis cache decorator
+│       ├── currency.py            # Multi-currency conversion helpers
+│       └── exceptions.py          # Custom HTTP exceptions
+│
+├── services/
+│   │
+│   ├── auth_service/              # Port 8001
+│   │   ├── app/
+│   │   │   ├── main.py            # FastAPI app + Prometheus + CORS
+│   │   │   ├── routers/
+│   │   │   │   ├── auth.py        # /auth/register, /auth/verify, /auth/me
+│   │   │   │   └── users.py       # /users (admin)
+│   │   │   ├── services/
+│   │   │   │   ├── firebase_service.py
+│   │   │   │   └── user_service.py
+│   │   │   ├── models/
+│   │   │   │   └── user.py        # SQLAlchemy ORM models
+│   │   │   └── schemas/
+│   │   │       ├── auth.py
+│   │   │       └── user.py
+│   │   ├── alembic/               # PostgreSQL migrations
+│   │   ├── tests/
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   │
+│   ├── core_api_service/          # Port 8002
+│   │   ├── app/
+│   │   │   ├── main.py
+│   │   │   ├── routers/
+│   │   │   │   ├── jobs.py
+│   │   │   │   ├── applications.py
+│   │   │   │   ├── kanban.py
+│   │   │   │   ├── profile.py
+│   │   │   │   └── employer.py
+│   │   │   ├── services/          # Business logic
+│   │   │   ├── schemas/           # Pydantic request/response models
+│   │   │   └── producers/
+│   │   │       └── kafka_events.py # Emit events to Kafka
+│   │   ├── tests/
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   │
+│   ├── ai_service/                # Port 8003
+│   │   ├── app/
+│   │   │   ├── main.py
+│   │   │   ├── routers/
+│   │   │   │   ├── ats.py         # /ai/score-resume → dispatches to Celery
+│   │   │   │   ├── chat.py        # /ai/chat → SSE stream
+│   │   │   │   ├── matching.py    # /ai/job-matches
+│   │   │   │   └── parser.py      # /ai/parse-resume
+│   │   │   └── services/
+│   │   │       ├── model_router.py     # Ollama vs OpenAI decision logic
+│   │   │       ├── token_optimizer.py  # Context summarization, window mgmt
+│   │   │       ├── ats_scorer.py       # spaCy + TF-IDF (no LLM for scoring)
+│   │   │       ├── resume_parser.py    # pdfplumber + python-docx
+│   │   │       ├── job_matcher.py      # sentence-transformers embeddings
+│   │   │       └── chat_service.py     # LangChain + streaming
+│   │   ├── workers/
+│   │   │   ├── celery_app.py
+│   │   │   └── tasks.py           # score_resume_task, match_jobs_task
+│   │   ├── prompts/               # System prompt templates
+│   │   ├── models/
+│   │   │   └── skill_ontology.json
+│   │   ├── tests/
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   │
+│   ├── scraper_service/           # Port 8004 (API only — Celery workers scrape)
+│   │   ├── app/
+│   │   │   ├── main.py
+│   │   │   └── routers/
+│   │   │       └── scraper.py     # /scraper/trigger, /scraper/status, /scraper/stats
+│   │   ├── workers/               # Celery — uses sync_playwright, no FastAPI
+│   │   │   ├── celery_app.py
+│   │   │   ├── tasks.py           # scrape_company_careers(company_config)
+│   │   │   └── scrapers/
+│   │   │       ├── base_scraper.py
+│   │   │       ├── playwright_scraper.py  # sync_playwright only
+│   │   │       ├── scrapling_scraper.py   # for simple CSS-selectable pages
+│   │   │       └── api_scrapers/
+│   │   │           ├── adzuna.py          # Adzuna REST API
+│   │   │           ├── jooble.py          # Jooble REST API
+│   │   │           └── remoteok.py        # RemoteOK API
+│   │   ├── normalizer/
+│   │   │   ├── job_normalizer.py
+│   │   │   ├── deduplicator.py
+│   │   │   └── geo_normalizer.py
+│   │   ├── scheduler/
+│   │   │   └── beat_schedule.py   # Celery Beat cron config
+│   │   ├── tests/
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   │
+│   ├── notification_service/      # Port 8005
+│   │   ├── app/
+│   │   │   ├── main.py
+│   │   │   ├── routers/
+│   │   │   │   └── notifications.py  # GET /notifications/inbox, WS endpoint
+│   │   │   ├── consumers/
+│   │   │   │   └── kafka_consumer.py # Consumes notification.* Kafka topics
+│   │   │   ├── channels/
+│   │   │   │   ├── email_sender.py   # Resend API
+│   │   │   │   ├── push_sender.py    # Firebase Cloud Messaging
+│   │   │   │   └── ws_manager.py     # WebSocket connection manager
+│   │   │   └── templates/            # Jinja2 HTML email templates
+│   │   ├── tests/
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   │
+│   ├── analytics_service/         # Port 8006
+│   │   ├── app/
+│   │   │   ├── main.py
+│   │   │   ├── routers/
+│   │   │   │   ├── employer.py
+│   │   │   │   ├── candidate.py
+│   │   │   │   └── admin.py
+│   │   │   ├── consumers/
+│   │   │   │   └── kafka_consumer.py # Consumes analytics.event topic
+│   │   │   └── aggregators/
+│   │   │       ├── funnel.py
+│   │   │       └── skill_demand.py
+│   │   ├── tests/
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   │
+│   └── admin_service/             # Port 8007 (internal network only)
+│       ├── app/
+│       │   ├── main.py
+│       │   └── routers/
+│       │       ├── users.py
+│       │       ├── employers.py
+│       │       ├── companies.py
+│       │       ├── job_approvals.py
+│       │       └── platform.py
+│       ├── tests/
+│       ├── Dockerfile
+│       └── requirements.txt
+│
+└── infra/
+    ├── nginx/
+    │   └── nginx.conf
+    ├── kafka/
+    │   └── server.properties      # KRaft mode config
+    ├── minio/
+    │   └── init-buckets.sh        # Create buckets on first run
+    ├── postgres/
+    │   └── init.sql
+    └── observability/
+        ├── prometheus.yml         # Scrape configs for all 7 services
+        ├── loki.yml
+        ├── tempo.yml
+        └── grafana/
+            └── dashboards/
+                ├── fastapi_overview.json
+                ├── kafka_overview.json
+                └── recruitzaa_business.json
+```
+
+---
+
+## 14. Full Docker Compose (v2 — Self-hosted VPS)
+
+```yaml
+# docker-compose.yml
+version: "3.9"
+
+services:
+  # ── NGINX ──
+  nginx:
+    image: nginx:1.25-alpine
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - nginx_certs:/etc/letsencrypt
+    depends_on: [auth, core, ai, scraper, notification, analytics]
+    restart: unless-stopped
+
+  # ── APPLICATION SERVICES ──
+  auth:
+    build: ./services/auth_service
+    environment:
+      - POSTGRES_URL=${POSTGRES_URL}
+      - REDIS_URL=${REDIS_URL}
+      - FIREBASE_CREDENTIALS_JSON=${FIREBASE_CREDENTIALS_JSON}
+    depends_on: [postgres, redis]
+    restart: unless-stopped
+
+  core:
+    build: ./services/core_api_service
+    environment:
+      - MONGO_URL=${MONGO_URL}
+      - REDIS_URL=${REDIS_URL}
+      - KAFKA_BOOTSTRAP=${KAFKA_BOOTSTRAP}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT}
+    depends_on: [mongo, redis, kafka]
+    restart: unless-stopped
+
+  ai:
+    build: ./services/ai_service
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OLLAMA_HOST=${OLLAMA_HOST}
+      - MONGO_URL=${MONGO_URL}
+      - REDIS_URL=${REDIS_URL}
+    depends_on: [mongo, redis, ollama]
+    restart: unless-stopped
+
+  scraper:
+    build: ./services/scraper_service
+    environment:
+      - MONGO_URL=${MONGO_URL}
+      - REDIS_URL=${REDIS_URL}
+      - KAFKA_BOOTSTRAP=${KAFKA_BOOTSTRAP}
+      - ADZUNA_API_KEY=${ADZUNA_API_KEY}
+    depends_on: [mongo, redis, kafka]
+    restart: unless-stopped
+
+  notification:
+    build: ./services/notification_service
+    environment:
+      - KAFKA_BOOTSTRAP=${KAFKA_BOOTSTRAP}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - FIREBASE_CREDENTIALS_JSON=${FIREBASE_CREDENTIALS_JSON}
+    depends_on: [kafka]
+    restart: unless-stopped
+
+  analytics:
+    build: ./services/analytics_service
+    environment:
+      - POSTGRES_URL=${POSTGRES_URL}
+      - MONGO_URL=${MONGO_URL}
+      - KAFKA_BOOTSTRAP=${KAFKA_BOOTSTRAP}
+    depends_on: [postgres, mongo, kafka]
+    restart: unless-stopped
+
+  admin:
+    build: ./services/admin_service
+    environment:
+      - POSTGRES_URL=${POSTGRES_URL}
+      - MONGO_URL=${MONGO_URL}
+      - KAFKA_BOOTSTRAP=${KAFKA_BOOTSTRAP}
+    depends_on: [postgres, mongo]
+    restart: unless-stopped
+
+  # ── CELERY WORKERS ──
+  celery_ai:
+    build: ./services/ai_service
+    command: celery -A app.workers.celery_app worker -Q ai_tasks -c 2 --loglevel=info
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OLLAMA_HOST=${OLLAMA_HOST}
+      - MONGO_URL=${MONGO_URL}
+    depends_on: [redis, mongo, ollama]
+    restart: unless-stopped
+
+  celery_scraper:
+    build: ./services/scraper_service
+    command: celery -A app.workers.celery_app worker -Q scrape_tasks -c 4 --loglevel=info
+    environment:
+      - MONGO_URL=${MONGO_URL}
+      - REDIS_URL=${REDIS_URL}
+      - KAFKA_BOOTSTRAP=${KAFKA_BOOTSTRAP}
+    depends_on: [redis, mongo, kafka]
+    restart: unless-stopped
+
+  celery_beat:
+    build: ./services/scraper_service
+    command: celery -A app.workers.celery_app beat --loglevel=info
+    depends_on: [redis]
+    restart: unless-stopped
+
+  # ── DATABASES ──
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: recruitzaa
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+    volumes: [mongo_data:/data/db]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes: [redis_data:/data]
+    restart: unless-stopped
+
+  # ── KAFKA (KRaft mode — no Zookeeper) ──
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LOG_RETENTION_HOURS: 168       # 7 days
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes: [kafka_data:/var/lib/kafka/data]
+    restart: unless-stopped
+
+  # ── MINIO (Self-hosted File Storage) ──
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports: ["9001:9001"]   # MinIO web UI (not exposed publicly, only internal)
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD}
+    volumes: [minio_data:/data]
+    restart: unless-stopped
+
+  # ── OLLAMA (Local LLM) ──
+  ollama:
+    image: ollama/ollama:latest
+    volumes: [ollama_data:/root/.ollama]
+    # GPU support: add `deploy.resources.reservations.devices` for NVIDIA
+    restart: unless-stopped
+
+  # ── OBSERVABILITY ──
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./infra/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports: ["3001:3000"]    # Grafana UI (secured behind auth)
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/observability/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+    depends_on: [prometheus, loki, tempo]
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:latest
+    volumes: [loki_data:/loki]
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro   # reads container logs
+    restart: unless-stopped
+
+  tempo:
+    image: grafana/tempo:latest
+    volumes: [tempo_data:/tmp/tempo]
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  mongo_data:
+  redis_data:
+  kafka_data:
+  minio_data:
+  ollama_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+  tempo_data:
+  nginx_certs:
+```
+
+---
+
+## 15. Complete REST API Route Table (Final)
+
+### Auth Service `/api/auth`
+| Method | Route | Role | Notes |
+|---|---|---|---|
+| POST | `/auth/register` | PUBLIC | Firebase token + requested_role |
+| POST | `/auth/verify` | PUBLIC | Returns AppUser + role |
+| POST | `/auth/logout` | AUTH | Clear Redis cache |
+| GET | `/auth/me` | AUTH | Current user info |
+| PUT | `/auth/me` | AUTH | Update display name / photo |
+| POST | `/auth/fcm-token` | AUTH | Register Android FCM token |
+
+### Core API `/api`
+| Method | Route | Role | Notes |
+|---|---|---|---|
+| GET | `/jobs` | PUBLIC | Search: keyword,location,type,work_mode,salary,currency |
+| GET | `/jobs/{id}` | PUBLIC | Job detail + Kafka job.viewed event |
+| GET | `/jobs/recommended` | CANDIDATE | AI-matched, user-specific |
+| POST | `/jobs` | EMPLOYER | Creates with status PENDING |
+| PUT | `/jobs/{id}` | EMPLOYER | Own jobs only |
+| DELETE | `/jobs/{id}` | EMPLOYER/ADMIN | Soft delete |
+| POST | `/jobs/{id}/apply` | CANDIDATE | Creates application |
+| GET | `/applications` | CANDIDATE | Own applications + filters |
+| PATCH | `/applications/{id}/stage` | CANDIDATE | Kanban move |
+| POST | `/applications/{id}/withdraw` | CANDIDATE | |
+| GET | `/employer/applications` | EMPLOYER | All their job applicants |
+| PATCH | `/employer/applications/{id}` | EMPLOYER | Shortlist/reject/hire |
+| POST | `/employer/applications/{id}/note` | EMPLOYER | Add note |
+| GET | `/kanban` | CANDIDATE | Full board |
+| PUT | `/kanban/move` | CANDIDATE | `{app_id, to_stage, position}` |
+| POST | `/kanban/save` | CANDIDATE | Save job (SAVED stage) |
+| DELETE | `/kanban/save/{job_id}` | CANDIDATE | Unsave |
+| GET | `/profile` | CANDIDATE | Own profile |
+| PUT | `/profile` | CANDIDATE | Update |
+| POST | `/profile/resume` | CANDIDATE | Upload (→ MinIO) |
+| DELETE | `/profile/resume/{id}` | CANDIDATE | Remove version |
+| GET | `/employer/profile` | EMPLOYER | |
+| PUT | `/employer/profile` | EMPLOYER | |
+| GET | `/employer/company` | EMPLOYER | |
+| PUT | `/employer/company` | EMPLOYER | |
+| GET | `/employer/jobs` | EMPLOYER | Own postings |
+
+### AI Service `/api/ai`
+| Method | Route | Role | Notes |
+|---|---|---|---|
+| POST | `/ai/score-resume` | CANDIDATE | Async → returns task_id |
+| GET | `/ai/tasks/{task_id}` | CANDIDATE | Poll result |
+| POST | `/ai/chat` | CANDIDATE | SSE stream, token-optimized |
+| GET | `/ai/chat/history` | CANDIDATE | Session history |
+| GET | `/ai/job-matches` | CANDIDATE | Ranked matches |
+| POST | `/ai/parse-resume` | CANDIDATE | Resume → structured JSON |
+
+### Scraper `/api/scraper`
+| Method | Route | Role | Notes |
+|---|---|---|---|
+| GET | `/scraper/companies` | ADMIN | List configured career pages |
+| POST | `/scraper/companies` | ADMIN | Add company career page |
+| PUT | `/scraper/companies/{id}` | ADMIN | Update selectors config |
+| POST | `/scraper/trigger/{company_id}` | ADMIN | Manual trigger |
+| GET | `/scraper/jobs` | ADMIN | Pending review queue |
+| GET | `/scraper/stats` | ADMIN | Run history, success rate |
+
+### Admin `/api/admin`
+| Method | Route | Role | Notes |
+|---|---|---|---|
+| GET | `/admin/users` | SUPER_ADMIN | All users, paginated |
+| PATCH | `/admin/users/{id}/role` | SUPER_ADMIN | Change role |
+| PATCH | `/admin/users/{id}/status` | SUPER_ADMIN | Activate/deactivate |
+| GET | `/admin/employers` | SUPER_ADMIN | Verification queue |
+| PATCH | `/admin/employers/{id}/verify` | SUPER_ADMIN | Approve/reject |
+| GET | `/admin/job-approvals` | SUPER_ADMIN | Pending jobs |
+| PATCH | `/admin/job-approvals/{id}` | SUPER_ADMIN | Approve/reject |
+| GET | `/admin/companies` | SUPER_ADMIN | All companies |
+| GET | `/admin/platform` | SUPER_ADMIN | Platform-wide stats |
+| GET | `/admin/audit-log` | SUPER_ADMIN | Full audit trail |
+
+### Notifications `/api/notifications`
+| Method | Route | Role | Notes |
+|---|---|---|---|
+| GET | `/notifications/inbox` | AUTH | In-app notifications list |
+| PATCH | `/notifications/{id}/read` | AUTH | Mark read |
+| DELETE | `/notifications/clear` | AUTH | Clear all |
+| WS | `/notifications/ws` | AUTH | Real-time WebSocket |
+
+### Analytics `/api/analytics`
+| Method | Route | Role | Notes |
+|---|---|---|---|
+| GET | `/analytics/employer` | EMPLOYER | Funnel, KPIs, trends |
+| GET | `/analytics/candidate` | CANDIDATE | Applications, ATS avg |
+| GET | `/analytics/admin/platform` | SUPER_ADMIN | Full platform stats |
+
+---
+
+## 16. Concurrency — How We Handle Scale
+
+```
+Request comes in → NGINX → FastAPI (Uvicorn async) → async DB call
+                                                     (non-blocking)
+                                     ↓
+                         DB responds → response out
+
+All DB drivers are async:
+  PostgreSQL  → asyncpg (connection pool: 20 per worker)
+  MongoDB     → Motor   (connection pool: 50 per worker)
+  Redis       → aioredis (connection pool: 20 per worker)
+  Kafka       → aiokafka (async producer/consumer)
+
+Heavy tasks NEVER run in FastAPI request cycle:
+  ATS scoring  → Celery worker (ai_tasks queue)
+  Scraping     → Celery worker (scrape_tasks queue)
+  Email send   → Celery worker (email_queue)
+  Embeddings   → Celery worker (ai_tasks queue)
+
+Gunicorn manages Uvicorn workers per service:
+  gunicorn app.main:app \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --workers 4 \          # 2 × CPU cores
+    --max-requests 2000    # Recycle worker to prevent memory leaks
+
+Result: Each service handles ~200-400 concurrent connections comfortably.
+```
+
+---
+
+## 17. Phased Execution Plan (Revised)
+
+| Phase | Duration | Scope | Deliverable |
+|---|---|---|---|
+| **Phase 0** | Week 1 | Docker Compose setup, shared lib, Kafka + all DBs + MinIO + Ollama running, .env | `make up` → all infra running |
+| **Phase 1** | Week 1–2 | Auth Service: register, verify, RBAC, PostgreSQL schema, Alembic | Firebase login works end-to-end |
+| **Phase 2** | Week 2–4 | Core API: Jobs, Applications, Kanban, Profiles, Employer | All frontend API calls functional |
+| **Phase 3** | Week 4–5 | AI Service: ATS (spaCy), resume parser, Ollama chat, job matching | AI Hub page works (offline first) |
+| **Phase 3b** | Week 5 | AI: OpenAI integration, token optimizer, hybrid router | Premium AI features |
+| **Phase 4** | Week 5–6 | Scraper: Adzuna/Jooble APIs + company career pages (Playwright workers) | 1000+ jobs ingested |
+| **Phase 5** | Week 6 | Notification Service: Resend email + FCM push + WebSocket | User gets notified on stage change |
+| **Phase 6** | Week 7 | Analytics Service: employer dashboard + admin platform stats | Analytics pages working |
+| **Phase 7** | Week 7 | Admin Service: approvals, user mgmt, employer verification | Super admin panel functional |
+| **Phase 8** | Week 8 | Observability: Prometheus + Grafana + Loki + Tempo wired up | Live dashboards per service |
+| **Phase 9** | Week 8+ | Android: FCM tokens, platform header, Android-specific testing | Android app connected |
+| **Phase 10** | Ongoing | Load testing (Locust), DB indexing, Kafka partition tuning | 1000+ concurrent users |
+
+---
+
+## 18. Key Python Libraries (Final)
+
+| Area | Library |
+|---|---|
+| Web framework | `fastapi`, `uvicorn[standard]`, `gunicorn` |
+| Validation | `pydantic[email] v2` |
+| PostgreSQL | `sqlalchemy[asyncio]`, `asyncpg`, `alembic` |
+| MongoDB | `motor` (async) |
+| Redis | `aioredis` |
+| Kafka | `aiokafka` |
+| Auth | `firebase-admin` |
+| AI — OpenAI | `openai`, `langchain`, `langchain-openai` |
+| AI — Offline | `ollama` (Python client) |
+| AI — NLP | `spacy`, `scikit-learn` |
+| AI — Embeddings | `sentence-transformers` |
+| File parsing | `pdfplumber`, `python-docx` |
+| Scraping | `playwright` (sync in workers), `scrapling`, `httpx` (for APIs) |
+| Task queue | `celery[redis]`, `redis` |
+| File storage | `boto3` (MinIO S3 API compatible) |
+| Email | `resend` |
+| Observability | `prometheus-fastapi-instrumentator`, `opentelemetry-sdk` |
+| Templates | `jinja2` |
+| Env config | `python-decouple` |
+| Testing | `pytest`, `pytest-asyncio`, `httpx`, `factory-boy` |
+| Quality | `ruff`, `pre-commit` (already configured) |
+
+---
+
+> [!NOTE]
+> **Next Step**: Confirm this plan looks good, then we start **Phase 0** — scaffolding the directory structure, Docker Compose, and shared library. No feature code yet, just the skeleton that makes everything compile and boot.

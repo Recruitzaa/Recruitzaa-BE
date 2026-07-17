@@ -11,3 +11,6 @@ env/
 .pytest_cache/
 .DS_Store
 *.apk
+
+# Graphify indexes
+graphify-out/

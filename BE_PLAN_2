@@ -1,14 +1,14 @@
 # Recruitzaa — Backend Architecture Plan (v2 — Revised & Final)
 
-> **Authored by**: Senior Backend Architect (10 YOE)  
-> **Stack**: Python FastAPI · Microservices · Kafka · MongoDB + PostgreSQL + Redis  
-> **Auth**: Firebase Admin SDK + RBAC (CANDIDATE / EMPLOYER / SUPER_ADMIN)  
-> **Scraping**: Playwright (isolated Celery workers) + Scrapling  
-> **AI**: Hybrid — Offline (Ollama/Llama) + Paid (OpenAI) with token optimization  
-> **Observability**: Prometheus + Grafana + Loki + Tempo  
-> **Storage**: MinIO (self-hosted S3-compatible, runs on VPS)  
-> **Deployment**: Docker Compose on VPS (self-hosted)  
-> **Android**: Same REST APIs consumed by Android client  
+> **Authored by**: Senior Backend Architect (10 YOE)
+> **Stack**: Python FastAPI · Microservices · Kafka · MongoDB + PostgreSQL + Redis
+> **Auth**: Firebase Admin SDK + RBAC (CANDIDATE / EMPLOYER / SUPER_ADMIN)
+> **Scraping**: Playwright (isolated Celery workers) + Scrapling
+> **AI**: Hybrid — Offline (Ollama/Llama) + Paid (OpenAI) with token optimization
+> **Observability**: Prometheus + Grafana + Loki + Tempo
+> **Storage**: MinIO (self-hosted S3-compatible, runs on VPS)
+> **Deployment**: Docker Compose on VPS (self-hosted)
+> **Android**: Same REST APIs consumed by Android client
 
 ---
 
@@ -107,7 +107,7 @@
 | Retention | TTL-based | Configurable (days/forever) |
 | Ops complexity | Low | Medium (use Confluent/KRaft mode) |
 
-**Decision:** Use Kafka with **KRaft mode** (no Zookeeper needed since Kafka 3.x).  
+**Decision:** Use Kafka with **KRaft mode** (no Zookeeper needed since Kafka 3.x).
 Single-broker for dev/MVP → expand to 3 brokers for production.
 
 ```
@@ -225,7 +225,7 @@ users            (id UUID PK, firebase_uid UNIQUE, email, role, is_active, creat
 user_profiles    (user_id FK, display_name, phone, photo_url, location, bio)
 companies        (id UUID, name, slug UNIQUE, website, domain, logo_url, verified, plan_tier)
 employers        (id UUID, user_id FK, company_id FK, job_title, department, verification_status)
-employer_verification (id, employer_id, step: 'EMAIL_DOMAIN'|'PENDING_REVIEW'|'APPROVED'|'REJECTED', 
+employer_verification (id, employer_id, step: 'EMAIL_DOMAIN'|'PENDING_REVIEW'|'APPROVED'|'REJECTED',
                        admin_note, updated_at)
 subscriptions    (id, company_id, plan, currency, start_date, end_date, is_active)
 audit_logs       (id, user_id, action, resource_type, resource_id, ip_address, user_agent, timestamp)
@@ -245,7 +245,8 @@ jobs {
 }
 
 applications {
-  _id, job_id, candidate_id, employer_id, 
+
+  _id, job_id, candidate_id, employer_id,
   stage: "SAVED"|"APPLIED"|"SCREENING"|"INTERVIEW"|"OFFER"|"REJECTED",
   applied_at, resume_url, cover_letter, ats_score_ref,
   stage_history: [{ stage, timestamp, changed_by }],
@@ -266,19 +267,19 @@ candidate_profiles {
   experience[{ title, company, start, end, description, is_current }],
   education[{ degree, institution, year }], certifications[],
   resume_versions[{ url, filename, uploaded_at, is_primary }],
-  preferred_job_types[], preferred_locations[], 
+  preferred_job_types[], preferred_locations[],
   salary_expectation: { min, max, currency },
   profile_completion_pct, availability, languages[]
 }
 
 employer_profiles {
-  _id, company_id, about, industry, team_size, 
+  _id, company_id, about, industry, team_size,
   culture[], benefits[], office_photos_urls[], social_links{},
   headquarters: { city, country }
 }
 
 ai_results {
-  _id, user_id, job_id, resume_url, 
+  _id, user_id, job_id, resume_url,
   ats_score: { overall, skill_match, experience_fit, keyword_density, formatting,
                keywords[{ keyword, found }], suggestions[] },
   model_used, computed_at, tokens_used
@@ -365,7 +366,7 @@ STEP 3 — Post-Approval Constraints
   REJECTED employers cannot post until re-verified
 
 Combined States:
-  employer.verification_status: 
+  employer.verification_status:
     EMAIL_DOMAIN_TRUSTED → can post immediately
     PENDING_REVIEW       → cannot post, waiting admin
     APPROVED             → can post (jobs still need approval)
@@ -396,18 +397,18 @@ Interview prep            OpenAI GPT-4o          Best for complex tasks
 Strategy 1 — Sliding Window Context
   Keep only the last 10 messages in MongoDB recent_messages[]
   Older messages are discarded from active context
-  
+
 Strategy 2 — Automatic Context Summarization
   When session exceeds 10 messages:
     → Summarize older messages using Ollama (free!)
     → Store summary in chat_sessions.context_summary
     → Next API call: system prompt = summary + last 10 msgs
     → Old messages removed from active context
-  
+
 Strategy 3 — System Prompt Caching (OpenAI feature)
   Long system prompts (resume + JD) are cached by OpenAI
   Repeated calls with same system prompt cost 50% less
-  
+
 Strategy 4 — Model Tier Routing
   Simple "what's my ATS score?" → Ollama (free)
   Complex "rewrite my resume for this role" → GPT-4o-mini
@@ -503,8 +504,8 @@ Kafka → job.scraped topic → Admin Service consumer
 
 ### 9.3 Why Playwright in Separate Process (Not FastAPI)
 
-FastAPI runs on `uvicorn` which has its own `asyncio` event loop.  
-Playwright's async API requires **its own event loop context**.  
+FastAPI runs on `uvicorn` which has its own `asyncio` event loop.
+Playwright's async API requires **its own event loop context**.
 Running `playwright` directly inside a FastAPI endpoint causes:
 - Event loop conflicts → `RuntimeError: This event loop is already running`
 - Blocking the API server while browser loads pages
@@ -549,13 +550,13 @@ async def trigger_scrape(company_id: str, admin = Depends(require_role("SUPER_AD
 ```
 recruitzaa-resumes/     → candidate resume PDFs/DOCXs
   {user_id}/{timestamp}_{filename}.pdf
-  
+
 recruitzaa-logos/       → company logos, employer profile photos
   companies/{company_id}/logo.png
-  
+
 recruitzaa-photos/      → candidate avatar images
   candidates/{user_id}/avatar.jpg
-  
+
 recruitzaa-exports/     → generated PDF reports, analytics exports
   exports/{job_id}/applicant_report_{date}.pdf
 ```
@@ -632,7 +633,7 @@ Falls back to FCM push if user is offline
 # stored in MongoDB jobs collection:
 salary: {
   "min": 80000,
-  "max": 120000, 
+  "max": 120000,
   "currency": "INR",  # ISO 4217
   "display": "₹80K – ₹1.2L/month",
   "usd_equivalent_min": 960,  # for sorting/comparison

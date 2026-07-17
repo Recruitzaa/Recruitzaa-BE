@@ -1,0 +1,794 @@
+# Recruitzaa — Backend Architecture Plan (v3 — FE-Aligned)
+
+> **Authored by**: Senior Backend Architect (10 YOE)
+> **Supersedes**: BE_PLAN_2
+> **Stack**: Python FastAPI · Microservices · Kafka · MongoDB + PostgreSQL + Redis
+> **Auth**: Firebase Admin SDK + RBAC + Multi-Role Session System
+> **Roles (v3)**: CANDIDATE · EMPLOYER · EXPERT · EMPLOYEE · SUPER_ADMIN (5 roles total)
+> **Routing**: FE uses HashRouter — all API calls always to the same origin
+
+---
+
+## What Changed from v2 → v3 (and Why)
+
+### Change 1: 5 Roles instead of 3
+
+v2 said: CANDIDATE / EMPLOYER / SUPER_ADMIN
+v3 says: CANDIDATE / EMPLOYER / EXPERT / EMPLOYEE / SUPER_ADMIN
+
+WHY: web/src/types/auth.types.ts line 1 defines:
+
+  export type UserRole = 'CANDIDATE' | 'EMPLOYER' | 'EXPERT' | 'EMPLOYEE' | 'SUPER_ADMIN';
+
+The FE has full dedicated dashboards and route guards for all 5 roles.
+The BE users table schema and require_role() dependency must reflect this.
+
+---
+
+### Change 2: Multi-Role Session System (The Biggest Change)
+
+v2 said: Each user has exactly ONE role stored in PostgreSQL.
+v3 says: Each user has a PRIMARY role but may have MULTIPLE available roles.
+         They choose the active role at login via the Enterprise Launchpad.
+
+WHY: web/src/types/auth.types.ts defines the AppUser interface:
+
+  export interface AppUser {
+    id: string;
+    email: string;
+    role: UserRole;              // backward-compat primary role
+    availableRoles?: UserRole[]; // all roles this user can access
+    activeRole?: UserRole;       // what they chose in this session
+    ...
+  }
+
+The FE LaunchpadPage.tsx reads appUser.availableRoles and shows a portal card
+for each role. RoleGuard.tsx line 85 checks:
+  if (!appUser || !allowedRoles.includes(appUser.activeRole || appUser.role)) {
+    return <Navigate to="/unauthorized" replace />;
+  }
+
+Backend implications:
+- PostgreSQL users table gains available_roles: text[] column
+- GET /auth/me response must include available_roles[] alongside role
+- Redis session cache stores { id, email, role, available_roles[], ... }
+
+---
+
+### Change 3: LinkedIn OIDC Provider
+
+v2 said: Google + GitHub social login.
+v3 says: Google + GitHub + LinkedIn (OIDC) social login.
+
+WHY: web/src/config/firebase.ts already imports OAuthProvider.
+     web/src/services/auth.service.ts already exports signInWithLinkedIn.
+
+NO BACKEND CODE CHANGE NEEDED. Firebase handles OIDC. The BE receives a
+standard Firebase ID token regardless of sign-in method.
+
+---
+
+### Change 4: FE Allowlist — BE Must Not Rely on It for Security
+
+v2 said: Nothing about allowlists.
+v3 says: The FE has web/src/config/allowlist.txt granting certain emails all 5
+         roles. This is a FRONTEND-ONLY convenience for demo/staging.
+         It is NOT a security boundary.
+
+WHY THIS MATTERS: An attacker can bypass the FE allowlist by forging a token.
+The BE must validate roles from its own PostgreSQL users.available_roles column.
+Replicate the allowlist in BE via ADMIN_EMAILS env var for staging only.
+
+---
+
+### Change 5: Expert + Employee Router Modules Added to Core API
+
+v2 said: Core API only had jobs, applications, kanban, profile, employer.
+v3 says: Core API gains expert.py and employee.py router modules.
+
+WHY: App.tsx shows these live routes guarded by RoleGuard:
+  /expert/dashboard         -> ExpertDashboardPage
+  /expert/calendar-settings -> CalendarSettingsPage
+  /expert/inbox             -> InboxPage (shared)
+  /employee/dashboard       -> EmployeeDashboardPage
+  /employee/timesheets      -> EmployeeDashboardPage (TODO: dedicated page)
+  /employee/payroll         -> EmployeeDashboardPage (TODO: dedicated page)
+  /employee/inbox           -> InboxPage (shared)
+
+These are NOT separate microservices — they live in core_api_service to avoid
+premature complexity while the FE pages are still placeholder dashboards.
+
+---
+
+### Change 6: InboxPage is Shared Across ALL Authenticated Roles
+
+v2 said: Notifications only delivered to Candidates.
+v3 says: /notifications/inbox is consumed by ALL authenticated users.
+
+WHY: App.tsx mounts InboxPage under 4 different role guards:
+  /candidate/inbox, /expert/inbox, /employee/inbox, /employer/inbox
+
+GET /notifications/inbox must NOT filter by role — return all notifications
+for the authenticated user_id regardless of role.
+
+---
+
+### Change 7: Public Jobs + Authenticated Job Context
+
+v2 said: /jobs is PUBLIC only.
+v3 says: FE has both public /jobs and authenticated /candidate/jobs routes
+         using the SAME JobListingsPage component.
+
+When called with Authorization: Bearer <token>, GET /jobs should optionally include:
+  - ai_match_score (from ai_results collection)
+  - is_saved (whether candidate saved this job to Kanban)
+  - application_status (if already applied)
+
+Same endpoint — it just enriches its response when auth context is present.
+
+---
+
+### Change 8: Kanban Stage Names Must Match FE Exactly
+
+v2 said: stage: "SAVED"|"APPLIED"|"SCREENING"|"INTERVIEW"|"OFFER"|"REJECTED"
+v3 says: Same, confirmed from kanbanSlice.ts.
+
+CONFIRMED STAGES (must match both FE and BE):
+  SAVED -> APPLIED -> SCREENING -> INTERVIEW -> OFFER
+                                              -> REJECTED (at any stage)
+
+---
+
+### Change 9: Profile Schema Enriched with FE AppUser Fields
+
+v2 said: candidate_profiles had basic fields.
+v3 says: All AppUser interface fields must be stored and returned.
+
+From web/src/types/auth.types.ts — these fields must be supported:
+  phone, location, isCurrentlyEmployed, currentCompany, currentRole,
+  currentSalary, noticePeriod, summary, skills (flat array),
+  resumeFileName, resumeFileSize
+
+---
+
+### Change 10: ATS Score Shape Must Match FE ATSScore Interface
+
+v2 said: ATS score stored; shape loosely defined.
+v3 says: Exact shape defined in web/src/types/ai.types.ts:
+
+  export interface ATSScore {
+    overall: number;
+    skillMatch: number;
+    experienceFit: number;
+    keywordDensity: number;
+    formatting: number;
+    keywords: { keyword: string; found: boolean }[];
+    suggestions: string[];
+  }
+
+BE ai_results.ats_score MongoDB field MUST serialize to this exact camelCase shape.
+Use Pydantic model_config = ConfigDict(alias_generator=to_camel) or explicit aliases.
+
+---
+
+### Change 11: Job Response Must Include More Fields
+
+v2 said: Basic job fields.
+v3 says: BE should return (and FE Job type should add):
+  salaryCurrency, salaryDisplay, companyId, employerId,
+  applicantsCount, expiresAt, aiMatchScore (when auth present),
+  isSaved (when auth present), applicationStatus (when auth present)
+
+---
+
+### Change 12: HashRouter — NGINX Config Simplified
+
+v2 said: NGINX serves SPA (implied path-based routing).
+v3 says: FE uses HashRouter (web/src/App.tsx line 2). NGINX always serves
+         index.html for / — it never handles FE route paths. Only /api/*
+         needs to be proxied to services.
+
+URL staging.recruitzaa.com/#/candidate/dashboard — everything after # is
+handled 100% by the browser. Server only sees staging.recruitzaa.com/.
+
+---
+
+## Decisions Locked (v3)
+
+| Topic | Decision |
+|---|---|
+| Messaging | Apache Kafka (KRaft mode, no Zookeeper) |
+| File Storage | MinIO (self-hosted S3-compatible on VPS) |
+| DB Hosting | Self-hosted (Docker on VPS) |
+| AI Strategy | Hybrid: Ollama (offline) + OpenAI GPT-4o (paid) |
+| AI Context | Sliding window + summarization (minimize token costs) |
+| Scraping | Company career pages (Playwright) + Adzuna/Jooble APIs |
+| Email | Resend (3000/month free tier) |
+| Employer Verify | 3-step: email domain -> admin review -> approved |
+| Salary | Multi-currency (ISO 4217 + Frankfurter API) |
+| Observability | Prometheus + Grafana + Loki + Tempo |
+| Docker | Docker Compose (dev + prod VPS) |
+| Auth Providers | Firebase: Email/Password + Google + GitHub + LinkedIn OIDC |
+| Roles (NEW) | 5 roles: CANDIDATE, EMPLOYER, EXPERT, EMPLOYEE, SUPER_ADMIN |
+| Multi-Role (NEW) | Users can hold multiple roles — Launchpad selects active session role |
+| API JSON (NEW) | camelCase responses to match FE TypeScript interfaces |
+| Router (NEW) | FE uses HashRouter — NGINX only needs to serve index.html |
+
+---
+
+## 1. Architecture (v3)
+
+  React SPA (HashRouter)  +  Android App
+           |
+           | HTTPS -> staging.recruitzaa.com/api/...
+           v
+  NGINX (/ -> index.html | /api/* -> proxy to microservices)
+           |
+    +------+-------+-------+-------+-------+-------+
+    |      |       |       |       |       |       |
+  Auth   Core    AI   Scraper  Notif  Analytics Admin
+  :8001  :8002  :8003  :8004   :8005   :8006   :8007
+
+  Core API :8002 routers:
+    jobs, applications, kanban, profile, employer,
+    expert (NEW), employee (NEW)
+
+---
+
+## 2. Kafka Topics (v3)
+
+  user.registered              -> Notification (welcome email)
+  user.role.changed            -> Audit + notification
+  user.role.added              -> NEW: when a second role is granted
+  job.created                  -> Analytics + AI embeddings
+  job.approved                 -> Notification + Search index
+  job.scraped                  -> Admin review queue
+  application.created          -> Employer notification + Analytics
+  application.stage.moved      -> Candidate notification + Analytics
+  expert.session.booked        -> NEW: Expert + Candidate notification
+  expert.session.completed     -> NEW: Analytics + Earnings update
+  employee.timesheet.submitted -> NEW: Payroll processor
+  ai.score.request             -> AI worker
+  ai.score.completed           -> Core API updates MongoDB
+  notification.email           -> Email worker
+  notification.push            -> FCM push worker
+  analytics.event              -> Analytics aggregator
+
+---
+
+## 3. Database Architecture (v3)
+
+### 3.1 PostgreSQL — Updated Schema
+
+-- CORE USER TABLES
+users (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  firebase_uid     VARCHAR(128) UNIQUE NOT NULL,
+  email            VARCHAR(255) UNIQUE NOT NULL,
+  primary_role     VARCHAR(20) NOT NULL DEFAULT 'CANDIDATE',
+  available_roles  TEXT[] NOT NULL DEFAULT ARRAY['CANDIDATE'],  -- NEW: multi-role
+  is_active        BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+
+user_profiles (
+  user_id          UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  display_name     VARCHAR(255),
+  phone            VARCHAR(30),
+  photo_url        TEXT,
+  location         VARCHAR(255),
+  bio              TEXT,
+  summary          TEXT,         -- NEW: AppUser.summary
+  notice_period    VARCHAR(50),  -- NEW: AppUser.noticePeriod
+  is_employed      BOOLEAN DEFAULT FALSE,  -- NEW: AppUser.isCurrentlyEmployed
+  current_company  VARCHAR(255),  -- NEW: AppUser.currentCompany
+  current_role     VARCHAR(255),  -- NEW: AppUser.currentRole
+  current_salary   VARCHAR(50)    -- NEW: AppUser.currentSalary
+)
+
+-- NEW: EXPERT TABLES
+expert_profiles (
+  id, user_id, headline, specializations TEXT[],
+  hourly_rate NUMERIC(10,2), currency VARCHAR(3) DEFAULT 'INR',
+  years_experience INT, linkedin_url TEXT,
+  is_available BOOLEAN DEFAULT TRUE, rating NUMERIC(3,2), total_sessions INT
+)
+
+expert_sessions (
+  id, expert_id, candidate_id, scheduled_at TIMESTAMPTZ,
+  duration_mins INT DEFAULT 60,
+  status VARCHAR(20) DEFAULT 'PENDING',   -- PENDING/CONFIRMED/COMPLETED/CANCELLED
+  meeting_url TEXT, notes TEXT, created_at TIMESTAMPTZ DEFAULT NOW()
+)
+
+expert_availability (
+  id, expert_id, day_of_week INT,
+  start_time TIME, end_time TIME,
+  timezone VARCHAR(50) DEFAULT 'Asia/Kolkata'
+)
+
+-- NEW: EMPLOYEE TABLES
+employee_profiles (
+  id, user_id, employee_code VARCHAR(50) UNIQUE,
+  department, designation, manager_id UUID, join_date DATE, employment_type VARCHAR(20)
+)
+
+timesheets (
+  id, employee_id, week_start DATE, hours_logged NUMERIC(5,2),
+  status VARCHAR(20) DEFAULT 'DRAFT',  -- DRAFT/SUBMITTED/APPROVED/REJECTED
+  submitted_at TIMESTAMPTZ, approved_by UUID
+)
+
+payroll_records (
+  id, employee_id, month DATE, gross_salary NUMERIC(12,2),
+  deductions NUMERIC(12,2), net_salary NUMERIC(12,2),
+  currency VARCHAR(3) DEFAULT 'INR', status VARCHAR(20), paid_at TIMESTAMPTZ
+)
+
+-- UNCHANGED FROM v2
+companies, employers, employer_verification, subscriptions,
+audit_logs, job_approvals, analytics_events, exchange_rates, user_fcm_tokens
+
+---
+
+### 3.2 MongoDB — Updated Document Store
+
+-- UPDATED candidate_profiles
+candidate_profiles {
+  _id, user_id, headline, bio,
+  summary,                         -- NEW: AppUser.summary
+  skills [{ name, level, years }],
+  skills_flat: ["React"],          -- NEW: flat array (AppUser.skills)
+  experience [...], education [...], certifications [],
+  resume_versions [{
+    url, filename, uploaded_at, is_primary,
+    file_size_display: "2.4 MB"    -- NEW: AppUser.resumeFileSize
+  }],
+  preferred_job_types [], preferred_locations [],
+  salary_expectation: { min, max, currency },
+  employment_status: {              -- NEW: groups AppUser employment fields
+    is_employed: bool,
+    current_company, current_role, current_salary, notice_period
+  },
+  profile_completion_pct, availability, languages []
+}
+
+-- UPDATED ai_results (ats_score must be camelCase to match FE ATSScore type)
+ai_results {
+  _id, user_id, job_id, resume_url,
+  ats_score: {
+    overall: int,
+    skillMatch: int,        -- camelCase matches FE ATSScore interface
+    experienceFit: int,     -- camelCase
+    keywordDensity: int,    -- camelCase
+    formatting: int,
+    keywords: [{ keyword: str, found: bool }],
+    suggestions: [str]
+  },
+  model_used, computed_at, tokens_used
+}
+
+-- NEW: expert_cards (for ExpertDiscoveryPage)
+expert_cards {
+  _id, user_id, display_name, photo_url, headline,
+  specializations [], hourly_rate, currency, rating,
+  total_sessions, years_experience, linkedin_url, is_available
+}
+
+-- UNCHANGED FROM v2
+jobs, applications, kanban_boards, employer_profiles, chat_sessions, scraped_jobs
+
+---
+
+### 3.3 Redis — Cache (v3 additions)
+
+  Token cache:      firebase:token:{hash}      -> AppUser obj w/ available_roles[] (TTL 5min)
+  Job search:       jobs:search:{hash}          -> results (TTL 2min)
+  Job detail:       job:{id}                    -> job doc (TTL 10min)
+  Profile cache:    profile:{user_id}           -> profile (TTL 5min)
+  Rate limits:      ratelimit:{ip}:{route}      -> counter (sliding window)
+  Dedup set:        scrape:dedup                -> set of hashes
+  Celery broker:    built-in Celery Redis backend
+  Expert listing:   experts:listing:{filters}   -> NEW (TTL 5min)
+  AI credits:       ai:credits:{user_id}:daily  -> NEW token budget (TTL 24h)
+
+---
+
+## 4. Authentication & RBAC (v3)
+
+### 4.1 Updated AppUser Model (Shared Pydantic)
+
+  # shared/models/user.py
+  class UserRole(str, Enum):
+      CANDIDATE   = "CANDIDATE"
+      EMPLOYER    = "EMPLOYER"
+      EXPERT      = "EXPERT"     # NEW
+      EMPLOYEE    = "EMPLOYEE"   # NEW
+      SUPER_ADMIN = "SUPER_ADMIN"
+
+  class AppUser(BaseModel):
+      id: str
+      firebase_uid: str
+      email: str
+      primary_role: UserRole
+      available_roles: list[UserRole]  # NEW: multi-role support
+      display_name: str
+      photo_url: Optional[str] = None
+      is_active: bool = True
+
+### 4.2 Auth Registration Flow
+
+  POST /api/auth/register
+  Body: { "firebase_token": "<idToken>", "requested_role": "CANDIDATE" }
+  (EMPLOYEE and SUPER_ADMIN are granted by SUPER_ADMIN only — not self-service)
+
+  Flow:
+    1. verify_id_token(firebase_token) -> get firebase_uid, email
+    2. Check if user exists in PostgreSQL
+       YES: return existing user (idempotent)
+    3. INSERT INTO users (firebase_uid, email, primary_role, available_roles)
+       VALUES (..., requested_role, ARRAY[requested_role])
+    4. Create empty profile in MongoDB
+    5. Emit user.registered Kafka event
+    6. Return AppUser JSON with available_roles[]
+
+### 4.3 Multi-Role Grant (SUPER_ADMIN Only)
+
+  PATCH /api/admin/users/{id}/roles
+  Body: { "add_role": "EMPLOYER" }
+
+  Flow:
+    1. UPDATE users SET available_roles = array_append(available_roles, 'EMPLOYER')
+    2. Invalidate Redis cache for this user
+    3. Emit user.role.added Kafka event -> email notification to user
+    4. Return updated AppUser
+
+### 4.4 GET /auth/me Response Shape (Must Match FE AppUser Interface — camelCase)
+
+  {
+    "id": "uuid",
+    "email": "user@example.com",
+    "role": "CANDIDATE",
+    "availableRoles": ["CANDIDATE", "EMPLOYER"],
+    "displayName": "Sanjay",
+    "photoURL": "https://...",
+    "phone": null,
+    "location": "Bangalore, IN",
+    "isCurrentlyEmployed": false,
+    "currentCompany": null,
+    "currentRole": null,
+    "currentSalary": null,
+    "noticePeriod": null,
+    "summary": null,
+    "skills": ["React", "TypeScript"],
+    "resumeFileName": "sanjay_resume_v2.pdf",
+    "resumeFileSize": "2.4 MB"
+  }
+
+  NOTE: camelCase response to match FE TypeScript AppUser interface exactly.
+  Use Pydantic model_config = ConfigDict(populate_by_name=True) with aliases.
+
+---
+
+## 5. Complete REST API Route Table (v3 — FE-Aligned)
+
+### Auth Service /api/auth
+| Method | Route | Role | Notes |
+|---|---|---|---|
+| POST | /auth/register | PUBLIC | Firebase token + requested_role |
+| POST | /auth/verify | PUBLIC | Returns AppUser with available_roles[] |
+| POST | /auth/logout | AUTH | Clear Redis token cache |
+| GET | /auth/me | AUTH | Returns full AppUser (camelCase, includes availableRoles) |
+| PUT | /auth/me | AUTH | Update display_name, photo, phone, location |
+| POST | /auth/fcm-token | AUTH | Register Android/Web FCM token |
+
+### Core API /api
+| Method | Route | Role | Notes |
+|---|---|---|---|
+| GET | /jobs | PUBLIC | Search + optional auth enrichment (match score, saved status) |
+| GET | /jobs/{id} | PUBLIC | Job detail; auth context enriches with match score |
+| POST | /jobs | EMPLOYER | Creates with status PENDING_APPROVAL |
+| PUT | /jobs/{id} | EMPLOYER | Own jobs only |
+| DELETE | /jobs/{id} | EMPLOYER/SUPER_ADMIN | Soft delete |
+| POST | /jobs/{id}/apply | CANDIDATE | Creates application; emits application.created |
+| GET | /applications | CANDIDATE | Own applications list + stage filters |
+| PATCH | /applications/{id}/stage | CANDIDATE | Move in Kanban; emits application.stage.moved |
+| POST | /applications/{id}/withdraw | CANDIDATE | |
+| GET | /employer/applications | EMPLOYER | All applicants for their jobs |
+| PATCH | /employer/applications/{id} | EMPLOYER | Shortlist/reject/hire |
+| POST | /employer/applications/{id}/note | EMPLOYER | Add private note |
+| GET | /kanban | CANDIDATE | Full board with all columns |
+| PUT | /kanban/move | CANDIDATE | {app_id, to_stage, position} |
+| POST | /kanban/save | CANDIDATE | Add job to SAVED column |
+| DELETE | /kanban/save/{job_id} | CANDIDATE | Remove from saved |
+| GET | /profile | CANDIDATE | Own profile (full AppUser + candidate_profiles) |
+| PUT | /profile | CANDIDATE | Update all fields incl. employment_status |
+| POST | /profile/resume | CANDIDATE | Upload to MinIO -> triggers ai.parse.request |
+| DELETE | /profile/resume/{version_id} | CANDIDATE | Remove a resume version |
+| GET | /employer/profile | EMPLOYER | |
+| PUT | /employer/profile | EMPLOYER | |
+| GET | /employer/company | EMPLOYER | |
+| PUT | /employer/company | EMPLOYER | Update company info |
+| GET | /employer/jobs | EMPLOYER | Own job postings list |
+| GET | /expert/discover | CANDIDATE | Browse experts (ExpertDiscoveryPage) |
+| GET | /expert/profile | EXPERT | Own expert profile |
+| PUT | /expert/profile | EXPERT | Update specializations, rate, availability |
+| GET | /expert/availability | EXPERT | Get calendar slots (CalendarSettingsPage) |
+| PUT | /expert/availability | EXPERT | Set weekly availability schedule |
+| GET | /expert/sessions | EXPERT | Upcoming + past sessions |
+| POST | /expert/sessions/{id}/confirm | EXPERT | Confirm a booking |
+| GET | /candidate/expert-sessions | CANDIDATE | Candidate's booked sessions |
+| POST | /candidate/book-expert/{expert_id} | CANDIDATE | Book a session slot |
+| GET | /employee/profile | EMPLOYEE | Own employee profile |
+| GET | /employee/timesheets | EMPLOYEE | List timesheets (EmployeeDashboardPage) |
+| POST | /employee/timesheets | EMPLOYEE | Submit new timesheet |
+| GET | /employee/payroll | EMPLOYEE | Payroll records (EmployeeDashboardPage) |
+
+### AI Service /api/ai
+| Method | Route | Role | Notes |
+|---|---|---|---|
+| POST | /ai/score-resume | CANDIDATE | Async -> returns task_id; result matches ATSScore TS type |
+| GET | /ai/tasks/{task_id} | CANDIDATE | Poll; on DONE returns ATSScore in camelCase |
+| POST | /ai/chat | CANDIDATE | SSE stream; session_type: resume_review/career_advice/interview_prep |
+| GET | /ai/chat/history | CANDIDATE | Returns recent_messages + context_summary |
+| GET | /ai/job-matches | CANDIDATE | Ranked job list with aiMatchScore (AIHubPage) |
+| POST | /ai/parse-resume | CANDIDATE | Resume PDF -> structured JSON (auto-fill profile) |
+| GET | /ai/credits | CANDIDATE | Daily token budget remaining |
+
+### Admin Service /api/admin
+| Method | Route | Role | Notes |
+|---|---|---|---|
+| GET | /admin/users | SUPER_ADMIN | Paginated user list (UsersPage) |
+| PATCH | /admin/users/{id}/role | SUPER_ADMIN | Change primary_role |
+| PATCH | /admin/users/{id}/roles | SUPER_ADMIN | Add/remove from available_roles[] (NEW) |
+| PATCH | /admin/users/{id}/status | SUPER_ADMIN | Activate/deactivate |
+| GET | /admin/employers | SUPER_ADMIN | Verification queue (EmployersPage) |
+| PATCH | /admin/employers/{id}/verify | SUPER_ADMIN | Approve/reject |
+| GET | /admin/job-approvals | SUPER_ADMIN | Pending jobs queue (JobApprovalsPage) |
+| PATCH | /admin/job-approvals/{id} | SUPER_ADMIN | Approve/reject job |
+| GET | /admin/companies | SUPER_ADMIN | All companies (CompaniesPage) |
+| GET | /admin/platform | SUPER_ADMIN | Platform-wide stats (SuperAdminDashboardPage) |
+| GET | /admin/audit-log | SUPER_ADMIN | Full audit trail |
+| GET | /admin/settings | SUPER_ADMIN | Platform settings (AdminSettingsPage) |
+| PUT | /admin/settings | SUPER_ADMIN | Update platform settings |
+
+### Scraper /api/scraper
+| Method | Route | Role | Notes |
+|---|---|---|---|
+| GET | /scraper/companies | SUPER_ADMIN | List configured career pages |
+| POST | /scraper/companies | SUPER_ADMIN | Add company career page |
+| PUT | /scraper/companies/{id} | SUPER_ADMIN | Update selectors config |
+| POST | /scraper/trigger/{company_id} | SUPER_ADMIN | Manual trigger |
+| GET | /scraper/jobs | SUPER_ADMIN | Pending review queue |
+| GET | /scraper/stats | SUPER_ADMIN | Run history, success rate |
+
+### Notifications /api/notifications
+| Method | Route | Role | Notes |
+|---|---|---|---|
+| GET | /notifications/inbox | AUTH (ALL roles) | No role filter — InboxPage is shared across all roles |
+| PATCH | /notifications/{id}/read | AUTH | Mark read |
+| DELETE | /notifications/clear | AUTH | Clear all |
+| WS | /notifications/ws | AUTH | Real-time WebSocket |
+
+### Analytics /api/analytics
+| Method | Route | Role | Notes |
+|---|---|---|---|
+| GET | /analytics/employer | EMPLOYER | Funnel, KPIs, trends (AnalyticsPage) |
+| GET | /analytics/candidate | CANDIDATE | Applications, ATS avg (DashboardPage) |
+| GET | /analytics/admin/platform | SUPER_ADMIN | Full platform stats (SuperAdminDashboardPage) |
+| GET | /analytics/expert | EXPERT | Sessions, earnings, ratings (ExpertDashboardPage) — NEW |
+
+---
+
+## 6. Updated Project Directory Structure (v3)
+
+  recruitzaa-be/
+  |
+  +-- docker-compose.yml
+  +-- docker-compose.prod.yml
+  +-- .env.example
+  +-- Makefile
+  |
+  +-- shared/
+  |   +-- auth/
+  |   |   +-- firebase_admin.py
+  |   |   +-- dependencies.py       # get_current_user, require_role
+  |   |   +-- rbac.py               # UserRole enum — 5 roles
+  |   +-- database/
+  |   |   +-- postgres.py, mongo.py, redis_client.py
+  |   +-- messaging/
+  |   |   +-- kafka_producer.py, kafka_consumer.py
+  |   |   +-- topics.py             # Updated with expert/employee events
+  |   +-- storage/
+  |   |   +-- minio_client.py
+  |   +-- models/
+  |   |   +-- user.py               # AppUser w/ available_roles[], 5-role UserRole
+  |   |   +-- responses.py
+  |   +-- utils/
+  |       +-- pagination.py, cache.py, currency.py
+  |       +-- serialization.py      # NEW: camelCase alias generator for Pydantic
+  |       +-- exceptions.py
+  |
+  +-- services/
+  |   |
+  |   +-- auth_service/             # Port 8001
+  |   |   +-- app/
+  |   |   |   +-- main.py
+  |   |   |   +-- routers/
+  |   |   |   |   +-- auth.py       # register, verify, me, logout, fcm-token
+  |   |   |   |   +-- users.py
+  |   |   |   +-- services/
+  |   |   |   |   +-- firebase_service.py
+  |   |   |   |   +-- user_service.py
+  |   |   |   +-- models/
+  |   |   |   |   +-- user.py       # SQLAlchemy: users + user_profiles tables
+  |   |   |   +-- schemas/
+  |   |   |       +-- auth.py       # RegisterRequest, AppUserResponse (camelCase)
+  |   |   |       +-- user.py
+  |   |   +-- alembic/
+  |   |   +-- tests/
+  |   |   +-- Dockerfile
+  |   |   +-- requirements.txt
+  |   |
+  |   +-- core_api_service/         # Port 8002
+  |   |   +-- app/
+  |   |   |   +-- main.py
+  |   |   |   +-- routers/
+  |   |   |   |   +-- jobs.py
+  |   |   |   |   +-- applications.py
+  |   |   |   |   +-- kanban.py
+  |   |   |   |   +-- profile.py
+  |   |   |   |   +-- employer.py
+  |   |   |   |   +-- expert.py     # NEW: profile, availability, sessions
+  |   |   |   |   +-- employee.py   # NEW: timesheets, payroll, profile
+  |   |   |   +-- services/
+  |   |   |   +-- schemas/
+  |   |   |   +-- producers/
+  |   |   |       +-- kafka_events.py
+  |   |   +-- alembic/              # Migrations for expert/employee PG tables
+  |   |   +-- tests/
+  |   |   +-- Dockerfile
+  |   |   +-- requirements.txt
+  |   |
+  |   +-- ai_service/               # Port 8003 (unchanged from v2)
+  |   +-- scraper_service/          # Port 8004 (unchanged from v2)
+  |   |
+  |   +-- notification_service/     # Port 8005 (updated: serves ALL roles)
+  |   |   +-- app/
+  |   |   |   +-- routers/
+  |   |   |   |   +-- notifications.py  # GET /inbox — no role filter
+  |   |   |   +-- consumers/
+  |   |   |   |   +-- kafka_consumer.py # Also consumes expert.session.* events
+  |   |   |   +-- channels/ (email, push, websocket)
+  |   |   |   +-- templates/
+  |   |   |       +-- welcome_candidate.html
+  |   |   |       +-- welcome_employer.html
+  |   |   |       +-- welcome_expert.html       # NEW
+  |   |   |       +-- expert_session_booked.html # NEW
+  |   |   |       +-- expert_session_reminder.html # NEW
+  |   |   |       +-- employer_verified.html
+  |   |   |       +-- job_approved.html
+  |   |   |       +-- application_received.html
+  |   |   |       +-- stage_update.html
+  |   |   |       +-- timesheet_approved.html   # NEW
+  |   |   |       +-- role_granted.html         # NEW
+  |   |   +-- Dockerfile, requirements.txt
+  |   |
+  |   +-- analytics_service/        # Port 8006 (adds expert analytics)
+  |   |   +-- app/routers/
+  |   |       +-- employer.py, candidate.py, admin.py
+  |   |       +-- expert.py         # NEW: sessions, earnings, ratings
+  |   |
+  |   +-- admin_service/            # Port 8007 (updated routes)
+  |       +-- app/routers/
+  |           +-- users.py          # Now includes PATCH /users/{id}/roles
+  |           +-- employers.py, companies.py, job_approvals.py, platform.py
+  |           +-- settings.py       # NEW: AdminSettingsPage backend
+  |
+  +-- infra/
+      +-- nginx/
+      |   +-- nginx.conf            # HashRouter-friendly (serve index.html for /)
+      +-- kafka/
+      +-- minio/
+      +-- postgres/
+      |   +-- init.sql              # Updated: expert/employee tables
+      +-- observability/ (unchanged)
+
+---
+
+## 7. NGINX Config (v3 — HashRouter Optimized)
+
+  server {
+      listen 443 ssl;
+      server_name staging.recruitzaa.com;
+
+      # API PROXIES
+      location /api/auth/        { proxy_pass http://auth:8001/;        }
+      location /api/ai/          { proxy_pass http://ai:8003/;          }
+      location /api/scraper/     { proxy_pass http://scraper:8004/;     }
+      location /api/notifications/ { proxy_pass http://notification:8005/; }
+      location /api/analytics/   { proxy_pass http://analytics:8006/;   }
+      location /api/admin/       { proxy_pass http://admin:8007/;       }
+      location /api/             { proxy_pass http://core:8002/;        }
+
+      # WebSocket for real-time notifications
+      location /api/notifications/ws {
+          proxy_pass http://notification:8005/notifications/ws;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection "upgrade";
+      }
+
+      # FRONTEND SPA (HashRouter)
+      # Because FE uses HashRouter, ALL non-API requests serve index.html.
+      # The browser handles /#/candidate/dashboard entirely client-side.
+      root /usr/share/nginx/html;
+      index index.html;
+
+      location / {
+          try_files $uri $uri/ /index.html;
+      }
+  }
+
+---
+
+## 8. Email Templates (v3 — Updated for All 5 Roles)
+
+  welcome_candidate.html          -> On CANDIDATE registration
+  welcome_employer.html           -> On EMPLOYER registration
+  welcome_expert.html             -> On EXPERT registration (NEW)
+  welcome_employee.html           -> On EMPLOYEE account creation (NEW, admin-created)
+  expert_session_booked.html      -> NEW: Expert + Candidate: session scheduled
+  expert_session_reminder.html    -> NEW: 1 hour before session
+  employer_verified.html          -> Employer approved/rejected
+  job_approved.html               -> Employer: job is live
+  application_received.html       -> Employer: new application
+  stage_update.html               -> Candidate: stage changed
+  timesheet_approved.html         -> NEW: Employee: timesheet approved/rejected
+  role_granted.html               -> NEW: User: "You now have EMPLOYER access"
+
+---
+
+## 9. Phased Execution Plan (v3)
+
+| Phase | Duration | Scope | Deliverable |
+|---|---|---|---|
+| Phase 0 | Week 1 | Docker Compose, shared lib, all DBs + Kafka + MinIO + Ollama | make up -> all infra running |
+| Phase 1 | Week 1-2 | Auth Service: 5-role support, multi-role schema, camelCase response | Firebase login -> Launchpad works |
+| Phase 2a | Week 2-3 | Core API: Jobs, Applications, Kanban, Candidate Profile (all AppUser fields) | Candidate flow works |
+| Phase 2b | Week 3-4 | Core API: Employer profile, company, job posting, applicant management | Employer flow works |
+| Phase 2c | Week 4 | Core API: Expert profile + availability + sessions; Employee timesheets | Expert/Employee dashboards populate |
+| Phase 3 | Week 4-5 | AI Service: ATS (camelCase), resume parser, Ollama chat, job matching | AI Hub page works |
+| Phase 3b | Week 5 | AI: OpenAI integration, token optimizer, hybrid router, AI credits | Premium AI features |
+| Phase 4 | Week 5-6 | Scraper: Adzuna/Jooble APIs + Playwright career pages | 1000+ jobs ingested |
+| Phase 5 | Week 6 | Notification Service: Resend email + FCM + WebSocket (all 5 roles) | All roles get notified |
+| Phase 6 | Week 7 | Analytics: employer + candidate + expert + admin stats | All analytics pages working |
+| Phase 7 | Week 7 | Admin Service: multi-role management, approvals, verification, settings | Super admin fully functional |
+| Phase 8 | Week 8 | Observability: Prometheus + Grafana + Loki + Tempo | Live dashboards |
+| Phase 9 | Week 8+ | Android: FCM tokens, platform headers, testing | Android app connected |
+| Phase 10 | Ongoing | Load testing, DB indexing, Kafka tuning | 1000+ concurrent users |
+
+---
+
+## 10. New Libraries vs v2
+
+| Area | Library | Why Added |
+|---|---|---|
+| camelCase JSON | pydantic v2 alias_generator | FE TypeScript interfaces use camelCase |
+| Expert sessions | SQLAlchemy (existing) | New expert/employee PG tables |
+| Calendar | python-dateutil | Availability timezone handling |
+| All other libs | Same as v2 | Unchanged |
+
+---
+
+IMPORTANT — Phase 1 Priority:
+The most critical Phase 1 deliverable is GET /auth/me returning availableRoles[]
+in camelCase. Without this, the Enterprise Launchpad on the FE will not know which
+role cards to show the user, and the RoleGuard will fail for all protected routes.
+Everything else in the FE depends on this being correct first.
+
+Next Step: Confirm this plan, then start Phase 0 — scaffolding the directory
+structure, Docker Compose, and shared library. First real test: a user registers
+via the FE auth page, BE creates their record with available_roles, Launchpad shows
+all their role cards correctly.

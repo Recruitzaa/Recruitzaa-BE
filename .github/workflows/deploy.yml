@@ -15,5 +15,6 @@ jobs:
       - name: Deploy application
         run: |
           cd ~/Recruitzaa-BE
+          git pull origin main
           chmod +x start_recruitzaa.sh
           ./start_recruitzaa.sh

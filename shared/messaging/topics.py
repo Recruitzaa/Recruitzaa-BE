@@ -1,6 +1,8 @@
 """
 shared/messaging/topics.py — All Kafka topic names as constants.
 """
+from __future__ import annotations
+
 
 # ── User Events ───────────────────────────────────────────
 USER_REGISTERED = "user.registered"

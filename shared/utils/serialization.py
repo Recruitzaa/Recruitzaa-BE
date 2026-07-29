@@ -5,6 +5,10 @@ FE TypeScript uses camelCase for all API response fields.
 Using alias_generator ensures Pydantic automatically converts
 snake_case field names to camelCase in JSON output.
 """
+from __future__ import annotations
+
+
+from typing import Union
 
 from pydantic import BaseModel, ConfigDict
 
@@ -37,7 +41,7 @@ class APIResponse(CamelModel):
 
     success: bool = True
     message: str = "OK"
-    data: dict | list | None = None
+    data: Union[dict, list, None] = None
 
 
 class PaginatedResponse(CamelModel):

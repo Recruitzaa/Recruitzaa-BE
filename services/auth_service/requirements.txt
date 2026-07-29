@@ -8,6 +8,8 @@ sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
 alembic==1.14.0
 motor==3.7.0
+minio==7.2.20
+eval-type-backport==0.4.0
 
 # Auth
 firebase-admin==6.6.0

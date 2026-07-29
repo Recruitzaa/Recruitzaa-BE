@@ -8,11 +8,13 @@ Usage:
     producer = await get_producer()
     await producer.send_event(USER_REGISTERED, {"user_id": "...", "email": "..."})
 """
+from __future__ import annotations
+
 
 import json
 import logging
 import os
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -61,7 +63,7 @@ class RecruitzaaProducer:
         envelope = {
             "event_id": str(uuid4()),
             "topic": topic,
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "payload": payload,
         }
         try:

@@ -3,9 +3,11 @@ Auth Service — /auth router.
 
 All endpoints defined in BE_PLAN_3 Section 5 Auth Service table.
 """
+from __future__ import annotations
+
 
 import logging
-from datetime import UTC
+from datetime import timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from firebase_admin import auth as firebase_auth
@@ -96,7 +98,7 @@ async def register(
                     "certifications": [],
                     "resume_versions": [],
                     "profile_completion_pct": 0,
-                    "created_at": datetime.now(UTC),
+                    "created_at": datetime.now(timezone.utc),
                 }
             },
             upsert=True,

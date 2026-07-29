@@ -2,6 +2,8 @@
 Alembic environment configuration for Auth Service.
 Uses async SQLAlchemy engine to support asyncpg.
 """
+from __future__ import annotations
+
 
 import asyncio
 import os

@@ -3,9 +3,11 @@ Auth Service — User service layer.
 
 Handles all PostgreSQL CRUD for users + user_profiles.
 """
+from __future__ import annotations
+
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -122,7 +124,7 @@ async def update_profile(
             setattr(profile, field, value)
 
     # Update user.updated_at
-    user.updated_at = datetime.now(UTC)
+    user.updated_at = datetime.now(timezone.utc)
     await session.flush()
     await session.refresh(user, ["profile"])
     return user

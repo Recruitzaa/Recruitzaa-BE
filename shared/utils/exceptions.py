@@ -1,6 +1,8 @@
 """
 shared/utils/exceptions.py — Custom HTTP exceptions for Recruitzaa.
 """
+from __future__ import annotations
+
 
 from fastapi import HTTPException, status
 

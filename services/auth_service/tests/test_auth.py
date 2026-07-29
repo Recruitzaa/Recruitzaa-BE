@@ -3,6 +3,8 @@ Auth Service Tests — /auth endpoints.
 
 Tests use httpx.AsyncClient with TestClient or real DB (integration tests).
 """
+from __future__ import annotations
+
 
 import os
 

@@ -1,6 +1,8 @@
 """
 Auth Service — Firebase verification and token decoding.
 """
+from __future__ import annotations
+
 
 import logging
 from typing import TypedDict

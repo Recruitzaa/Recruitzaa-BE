@@ -1,6 +1,8 @@
 """
 shared/storage/minio_client.py — MinIO (S3-compatible) client wrapper.
 """
+from __future__ import annotations
+
 
 import logging
 import os

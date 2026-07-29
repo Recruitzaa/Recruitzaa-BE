@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Auth Service Pydantic schemas — request/response shapes.
 

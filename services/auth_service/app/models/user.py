@@ -2,9 +2,11 @@
 Auth Service SQLAlchemy ORM models.
 Maps to: users, user_profiles, user_fcm_tokens PostgreSQL tables.
 """
+from __future__ import annotations
+
 
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     ARRAY,
@@ -22,7 +24,7 @@ from shared.database.postgres import Base
 
 
 def _now():
-    return datetime.now(UTC)
+    return datetime.now(timezone.utc)
 
 
 class User(Base):

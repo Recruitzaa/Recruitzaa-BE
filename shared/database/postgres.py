@@ -1,6 +1,8 @@
 """
 shared/database/postgres.py — Async SQLAlchemy engine for PostgreSQL.
 """
+from __future__ import annotations
+
 
 import logging
 import os

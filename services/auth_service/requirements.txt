@@ -18,6 +18,9 @@ redis==5.2.1
 # Messaging
 aiokafka==0.11.0
 
+# Object storage
+minio==7.2.20
+
 # HTTP client
 httpx==0.28.1
 

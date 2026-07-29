@@ -19,8 +19,10 @@ Usage:
     ):
         ...
 """
+
 import hashlib
 import logging
+from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -34,9 +36,11 @@ logger = logging.getLogger(__name__)
 
 security = HTTPBearer(auto_error=True)
 
+
 # Lazy import redis to avoid circular deps at module load time
 def _get_redis():
     from shared.database.redis_client import get_redis_client
+
     return get_redis_client()
 
 
@@ -70,7 +74,7 @@ async def _cache_user(token_hash: str, user: AppUser, ttl: int = 300) -> None:
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
 ) -> AppUser:
     """
     FastAPI dependency: verify Firebase ID token and return AppUser.
@@ -98,18 +102,18 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has been revoked. Please sign in again.",
-        )
+        ) from None
     except firebase_auth.ExpiredIdTokenError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired.",
-        )
+        ) from None
     except Exception as exc:
         logger.warning("Firebase token verification failed: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication token.",
-        )
+        ) from None
 
     firebase_uid: str = decoded["uid"]
 
@@ -119,25 +123,29 @@ async def get_current_user(
 
     try:
         async with get_db_session() as session:
-            user = await get_user_by_firebase_uid(session, firebase_uid)
+            db_user = await get_user_by_firebase_uid(session, firebase_uid)
     except Exception as exc:
         logger.error("DB lookup failed for uid=%s: %s", firebase_uid, exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not load user profile.",
-        )
+        ) from exc
 
-    if user is None:
+    if db_user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found. Please register first.",
         )
 
-    if not user.is_active:
+    if not db_user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is deactivated.",
         )
+
+    from services.auth_service.app.services.user_service import user_to_app_user
+
+    user = user_to_app_user(db_user)
 
     # 4. Cache result
     await _cache_user(token_hash, user)
@@ -153,13 +161,15 @@ def require_role(*roles: UserRole):
     """
     allowed = set(roles)
 
-    async def _check_role(user: AppUser = Depends(get_current_user)) -> AppUser:
+    async def _check_role(
+        user: Annotated[AppUser, Depends(get_current_user)],
+    ) -> AppUser:
         effective_role = user.active_role or user.primary_role
         if effective_role not in allowed:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"This endpoint requires one of: {[r.value for r in allowed]}. "
-                       f"Your active role is: {effective_role.value}",
+                f"Your active role is: {effective_role.value}",
             )
         return user
 

@@ -5,8 +5,9 @@ echo "🚀 Starting Recruitzaa Environment..."
 
 # 1. Start backend infrastructure and Auth Service
 echo "📦 Starting Docker containers (Postgres, Mongo, Redis, Kafka, MinIO, Auth, pgAdmin, Mongo Express)..."
-cd /home/sumanth/Recruitzaa-BE
-docker compose up -d
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+docker compose up -d --build
 
 # 2. Start Cloudflare Tunnel
 echo "☁️ Starting Cloudflare Tunnel in background..."

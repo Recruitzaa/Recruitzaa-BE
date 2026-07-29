@@ -3,6 +3,7 @@ Auth Service — User service layer.
 
 Handles all PostgreSQL CRUD for users + user_profiles.
 """
+
 import logging
 import os
 from datetime import UTC, datetime
@@ -22,6 +23,32 @@ from shared.auth.rbac import UserRole
 logger = logging.getLogger(__name__)
 
 
+def user_to_app_user(user: User):
+    """Convert an ORM user to the shared authentication model."""
+    from shared.models.user import AppUser
+
+    profile = user.profile
+    return AppUser(
+        id=str(user.id),
+        firebase_uid=user.firebase_uid,
+        email=user.email,
+        primary_role=UserRole(user.primary_role),
+        available_roles=[UserRole(role) for role in user.available_roles],
+        display_name=profile.display_name if profile else None,
+        photo_url=profile.photo_url if profile else None,
+        phone=profile.phone if profile else None,
+        location=profile.location if profile else None,
+        bio=profile.bio if profile else None,
+        summary=profile.summary if profile else None,
+        is_currently_employed=(profile.is_employed or False) if profile else False,
+        current_company=profile.current_company if profile else None,
+        current_role=profile.current_role if profile else None,
+        current_salary=profile.current_salary if profile else None,
+        notice_period=profile.notice_period if profile else None,
+        is_active=user.is_active,
+    )
+
+
 async def get_user_by_firebase_uid(
     session: AsyncSession, firebase_uid: str
 ) -> User | None:
@@ -36,18 +63,14 @@ async def get_user_by_firebase_uid(
 
 async def get_user_by_id(session: AsyncSession, user_id: str) -> User | None:
     result = await session.execute(
-        select(User)
-        .options(selectinload(User.profile))
-        .where(User.id == user_id)
+        select(User).options(selectinload(User.profile)).where(User.id == user_id)
     )
     return result.scalar_one_or_none()
 
 
 async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
     result = await session.execute(
-        select(User)
-        .options(selectinload(User.profile))
-        .where(User.email == email)
+        select(User).options(selectinload(User.profile)).where(User.email == email)
     )
     return result.scalar_one_or_none()
 
@@ -69,7 +92,9 @@ async def create_user(
     # Idempotency check
     existing = await get_user_by_firebase_uid(session, firebase_uid)
     if existing:
-        logger.info("User already exists for firebase_uid=%s — returning existing", firebase_uid)
+        logger.info(
+            "User already exists for firebase_uid=%s — returning existing", firebase_uid
+        )
         return existing
 
     # Check if this email is an admin — auto-grant all 5 roles
@@ -77,7 +102,11 @@ async def create_user(
     admin_emails = [e.strip().lower() for e in admin_emails_raw.split(",") if e.strip()]
     all_roles = [r.value for r in UserRole]
 
-    requested_role_str = requested_role.value if hasattr(requested_role, "value") else str(requested_role)
+    requested_role_str = (
+        requested_role.value
+        if hasattr(requested_role, "value")
+        else str(requested_role)
+    )
 
     if email.lower() in admin_emails:
         roles = all_roles
@@ -167,7 +196,9 @@ async def add_fcm_token(
     )
     session.add(token)
     await session.flush()
-    logger.info("FCM token registered for user_id=%s platform=%s", user.id, data.platform)
+    logger.info(
+        "FCM token registered for user_id=%s platform=%s", user.id, data.platform
+    )
 
 
 async def deactivate_user(session: AsyncSession, user_id: str) -> None:
@@ -184,26 +215,26 @@ def user_to_response(user: User) -> AppUserResponse:
     This is the single place that maps DB fields to the FE AppUser interface.
     camelCase serialization is handled by CamelModel alias_generator.
     """
-    profile = user.profile or UserProfile(user_id=user.id)
+    app_user = user_to_app_user(user)
     return AppUserResponse(
-        id=str(user.id),
-        email=user.email,
-        firebase_uid=user.firebase_uid,
-        role=UserRole(user.primary_role),       # backward-compat field
-        available_roles=[UserRole(r) for r in user.available_roles],
-        display_name=profile.display_name,
-        photo_url=profile.photo_url,
-        phone=profile.phone,
-        location=profile.location,
-        bio=profile.bio,
-        summary=profile.summary,
-        is_currently_employed=profile.is_employed or False,
-        current_company=profile.current_company,
-        current_role=profile.current_role,
-        current_salary=profile.current_salary,
-        notice_period=profile.notice_period,
-        skills=[],                              # populated from MongoDB candidate_profiles
-        resume_file_name=None,                  # populated from MongoDB
-        resume_file_size=None,                  # populated from MongoDB
-        is_active=user.is_active,
+        id=app_user.id,
+        email=app_user.email,
+        firebase_uid=app_user.firebase_uid,
+        role=app_user.primary_role,  # backward-compat field
+        available_roles=app_user.available_roles,
+        display_name=app_user.display_name,
+        photo_url=app_user.photo_url,
+        phone=app_user.phone,
+        location=app_user.location,
+        bio=app_user.bio,
+        summary=app_user.summary,
+        is_currently_employed=app_user.is_currently_employed,
+        current_company=app_user.current_company,
+        current_role=app_user.current_role,
+        current_salary=app_user.current_salary,
+        notice_period=app_user.notice_period,
+        skills=[],  # populated from MongoDB candidate_profiles
+        resume_file_name=None,  # populated from MongoDB
+        resume_file_size=None,  # populated from MongoDB
+        is_active=app_user.is_active,
     )

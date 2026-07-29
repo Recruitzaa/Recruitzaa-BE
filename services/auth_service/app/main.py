@@ -1,6 +1,7 @@
 """
 Auth Service — FastAPI application entry point.
 """
+
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -9,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from services.auth_service.app.routers import auth
+from services.auth_service.app.routers import admin, auth
 from shared.auth.firebase_admin import get_firebase_app
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -38,6 +39,7 @@ async def lifespan(app: FastAPI):
         from sqlalchemy import text
 
         from shared.database.postgres import get_engine
+
         async with get_engine().connect() as conn:
             await conn.execute(text("SELECT 1"))
         logger.info("✅ PostgreSQL connected")
@@ -47,6 +49,7 @@ async def lifespan(app: FastAPI):
     # Verify Redis connection
     try:
         from shared.database.redis_client import get_redis_client
+
         redis = await get_redis_client()
         await redis.ping()
         logger.info("✅ Redis connected")
@@ -56,6 +59,7 @@ async def lifespan(app: FastAPI):
     # Verify MongoDB connection
     try:
         from shared.database.mongo import get_mongo_client
+
         client = get_mongo_client()
         await client.admin.command("ping")
         logger.info("✅ MongoDB connected")
@@ -68,10 +72,12 @@ async def lifespan(app: FastAPI):
     # ── Shutdown ──
     logger.info("🛑 Auth Service shutting down...")
     from shared.database.redis_client import close_redis
+
     await close_redis()
     # Close global producer if open
     try:
         import shared.messaging.kafka_producer as kp
+
         if kp._producer:
             await kp._producer.stop()
     except Exception:
@@ -82,7 +88,9 @@ async def lifespan(app: FastAPI):
 # ─── FastAPI App ──────────────────────────────────────────────────────────────
 app = FastAPI(
     title="Recruitzaa — Auth Service",
-    description="Authentication, registration, and user profile management for all 5 roles.",
+    description=(
+        "Authentication, registration, and user profile management for all 5 roles."
+    ),
     version="3.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
@@ -105,6 +113,7 @@ app.add_middleware(
 
 # ─── Routers ──────────────────────────────────────────────────────────────────
 app.include_router(auth.router)
+app.include_router(admin.router)
 
 
 # ─── Health Check ─────────────────────────────────────────────────────────────

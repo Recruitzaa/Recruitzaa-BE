@@ -1,8 +1,8 @@
 """
 shared/database/mongo.py — Async MongoDB client via Motor.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 import logging
 import os

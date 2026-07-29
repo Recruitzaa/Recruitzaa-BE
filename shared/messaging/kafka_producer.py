@@ -8,8 +8,8 @@ Usage:
     producer = await get_producer()
     await producer.send_event(USER_REGISTERED, {"user_id": "...", "email": "..."})
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 import json
 import logging
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 _producer: AIOKafkaProducer | None = None
 
 
-async def get_producer() -> "RecruitzaaProducer":
+async def get_producer() -> RecruitzaaProducer:
     return RecruitzaaProducer()
 
 

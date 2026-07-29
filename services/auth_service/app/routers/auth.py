@@ -3,8 +3,8 @@ Auth Service — /auth router.
 
 All endpoints defined in BE_PLAN_3 Section 5 Auth Service table.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 import logging
 from datetime import timezone

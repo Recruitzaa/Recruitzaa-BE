@@ -2,8 +2,8 @@
 Auth Service SQLAlchemy ORM models.
 Maps to: users, user_profiles, user_fcm_tokens PostgreSQL tables.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone

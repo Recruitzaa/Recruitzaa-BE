@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 # 1. Test exceptions
 from shared.utils.exceptions import (
-    NotFoundException,
-    UnauthorizedException,
-    ForbiddenException,
     ConflictException,
-    UnprocessableException,
+    ForbiddenException,
+    NotFoundException,
     ServiceUnavailableException,
+    UnauthorizedException,
+    UnprocessableException,
 )
+
 
 def test_custom_exceptions():
     assert NotFoundException().status_code == 404
@@ -24,7 +26,8 @@ def test_custom_exceptions():
 
 
 # 2. Test pagination
-from shared.utils.pagination import paginate, get_skip
+from shared.utils.pagination import get_skip, paginate
+
 
 def test_pagination():
     res = paginate(items=["a", "b"], total=5, page=2, page_size=2)
@@ -43,7 +46,8 @@ def test_pagination():
 
 
 # 3. Test caching helpers
-from shared.utils.cache import cache_get, cache_set, cache_delete, cache_delete_pattern
+from shared.utils.cache import cache_delete, cache_delete_pattern, cache_get, cache_set
+
 
 @pytest.mark.asyncio
 async def test_cache_helpers():
@@ -88,10 +92,14 @@ async def test_cache_helpers():
 # 4. Test MongoDB Database Helper
 from shared.database.mongo import get_mongo_client, get_mongo_db
 
-@patch.dict(os.environ, {"MONGODB_URL": "mongodb://localhost:27017", "MONGO_DB": "test_db"})
+
+@patch.dict(
+    os.environ, {"MONGODB_URL": "mongodb://localhost:27017", "MONGO_DB": "test_db"}
+)
 @patch("shared.database.mongo.AsyncIOMotorClient")
 def test_mongo_helpers(mock_motor_client):
     import shared.database.mongo as mongo
+
     mongo._client = None
 
     client = get_mongo_client()
@@ -103,13 +111,17 @@ def test_mongo_helpers(mock_motor_client):
 
 
 # 5. Test Redis Database Helper
-from shared.database.redis_client import get_redis_client, close_redis
+from shared.database.redis_client import close_redis, get_redis_client
+
 
 @pytest.mark.asyncio
 async def test_redis_helpers():
-    with patch.dict(os.environ, {"REDIS_URL": "redis://localhost:6379/0"}), \
-         patch("shared.database.redis_client.from_url") as mock_from_url:
+    with (
+        patch.dict(os.environ, {"REDIS_URL": "redis://localhost:6379/0"}),
+        patch("shared.database.redis_client.from_url") as mock_from_url,
+    ):
         import shared.database.redis_client as redis_client
+
         redis_client._redis = None
 
         mock_redis_instance = AsyncMock()
@@ -117,7 +129,9 @@ async def test_redis_helpers():
 
         client = await get_redis_client()
         assert client == mock_redis_instance
-        mock_from_url.assert_called_with("redis://localhost:6379/0", decode_responses=True)
+        mock_from_url.assert_called_with(
+            "redis://localhost:6379/0", decode_responses=True
+        )
 
         await close_redis()
         mock_redis_instance.aclose.assert_called_once()
@@ -125,17 +139,28 @@ async def test_redis_helpers():
 
 
 # 6. Test MinIO Storage Helper
-from shared.storage.minio_client import get_minio_client, ensure_bucket, upload_file, get_presigned_url, delete_file
+from shared.storage.minio_client import (
+    delete_file,
+    ensure_bucket,
+    get_minio_client,
+    get_presigned_url,
+    upload_file,
+)
 
-@patch.dict(os.environ, {
-    "MINIO_ENDPOINT": "localhost:9000",
-    "MINIO_ACCESS_KEY": "access",
-    "MINIO_SECRET_KEY": "secret",
-    "MINIO_USE_SSL": "false"
-})
+
+@patch.dict(
+    os.environ,
+    {
+        "MINIO_ENDPOINT": "localhost:9000",
+        "MINIO_ACCESS_KEY": "access",
+        "MINIO_SECRET_KEY": "secret",
+        "MINIO_USE_SSL": "false",
+    },
+)
 @patch("shared.storage.minio_client.Minio")
 def test_minio_helpers(mock_minio):
     import shared.storage.minio_client as minio_client
+
     minio_client._client = None
 
     mock_minio_instance = MagicMock()
@@ -147,7 +172,7 @@ def test_minio_helpers(mock_minio):
         endpoint="localhost:9000",
         access_key="access",
         secret_key="secret",
-        secure=False
+        secure=False,
     )
 
     # Test ensure_bucket
@@ -174,11 +199,15 @@ def test_minio_helpers(mock_minio):
 # 7. Test Kafka Producer
 from shared.messaging.kafka_producer import get_producer
 
+
 @pytest.mark.asyncio
 async def test_kafka_producer():
-    with patch.dict(os.environ, {"KAFKA_BOOTSTRAP_SERVERS": "localhost:9092"}), \
-         patch("shared.messaging.kafka_producer.AIOKafkaProducer") as mock_aiokafka:
+    with (
+        patch.dict(os.environ, {"KAFKA_BOOTSTRAP_SERVERS": "localhost:9092"}),
+        patch("shared.messaging.kafka_producer.AIOKafkaProducer") as mock_aiokafka,
+    ):
         import shared.messaging.kafka_producer as kafka_producer
+
         kafka_producer._producer = None
 
         mock_prod_instance = AsyncMock()

@@ -1,8 +1,8 @@
 """
 shared/auth/rbac.py — UserRole enum for all 5 Recruitzaa roles.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 from enum import Enum
 
@@ -15,11 +15,11 @@ class UserRole(str, Enum):
     SUPER_ADMIN = "SUPER_ADMIN"
 
     @classmethod
-    def self_service_roles(cls) -> list["UserRole"]:
+    def self_service_roles(cls) -> list[UserRole]:
         """Roles a user can request at registration (public sign-up)."""
         return [cls.CANDIDATE, cls.EMPLOYER, cls.EXPERT]
 
     @classmethod
-    def admin_only_roles(cls) -> list["UserRole"]:
+    def admin_only_roles(cls) -> list[UserRole]:
         """Roles only SUPER_ADMIN can grant."""
         return [cls.EMPLOYEE, cls.SUPER_ADMIN]

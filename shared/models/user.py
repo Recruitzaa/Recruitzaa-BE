@@ -5,8 +5,8 @@ Matches FE AppUser interface from web/src/types/auth.types.ts exactly.
 All fields use camelCase aliases (via serialization.py) so the JSON response
 matches what the FE TypeScript expects.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 from pydantic import ConfigDict, Field
 

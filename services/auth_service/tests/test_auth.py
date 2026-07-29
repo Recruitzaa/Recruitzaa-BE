@@ -3,8 +3,8 @@ Auth Service Tests — /auth endpoints.
 
 Tests use httpx.AsyncClient with TestClient or real DB (integration tests).
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 import os
 
@@ -84,9 +84,9 @@ async def test_register_admin_role_rejected(client):
             json={"firebaseToken": "any", "requestedRole": role},
         )
         # 422 (validation error) before Firebase token check
-        assert (
-            resp.status_code == 422
-        ), f"Expected 422 for role {role}, got {resp.status_code}"
+        assert resp.status_code == 422, (
+            f"Expected 422 for role {role}, got {resp.status_code}"
+        )
 
 
 @pytest.mark.asyncio

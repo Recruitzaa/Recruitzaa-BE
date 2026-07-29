@@ -3,8 +3,8 @@ shared/messaging/kafka_consumer.py — Base async Kafka consumer (aiokafka).
 
 Each microservice extends BaseKafkaConsumer to handle specific topics.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 import json
 import logging

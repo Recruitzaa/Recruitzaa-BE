@@ -11,7 +11,7 @@ select = [
     "B",  # bugbear (common bugs/design issues)
     "UP", # pyupgrade (modern Python syntax)
 ]
-ignore = []
+ignore = ["UP017", "E402", "B008", "B904", "UP042", "E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]

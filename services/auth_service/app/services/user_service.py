@@ -3,8 +3,8 @@ Auth Service — User service layer.
 
 Handles all PostgreSQL CRUD for users + user_profiles.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone

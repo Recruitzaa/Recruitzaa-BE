@@ -1,8 +1,8 @@
 """
 shared/utils/pagination.py — Pagination utilities.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 from shared.utils.serialization import PaginatedResponse
 

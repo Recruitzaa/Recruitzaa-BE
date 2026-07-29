@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from services.auth_service.app.routers import admin, auth
+from services.auth_service.app.routers import admin, auth, companies
 from shared.auth.firebase_admin import get_firebase_app
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -114,6 +114,7 @@ app.add_middleware(
 # ─── Routers ──────────────────────────────────────────────────────────────────
 app.include_router(auth.router)
 app.include_router(admin.router)
+app.include_router(companies.router)
 
 
 # ─── Health Check ─────────────────────────────────────────────────────────────

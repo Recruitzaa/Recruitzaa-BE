@@ -8,6 +8,7 @@ echo "📦 Starting Docker containers (Postgres, Mongo, Redis, Kafka, MinIO, Aut
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 docker compose up -d --build
+docker compose exec -T --workdir /app/services/auth_service auth-service alembic upgrade head
 
 # 2. Start Cloudflare Tunnel
 echo "☁️ Starting Cloudflare Tunnel in background..."

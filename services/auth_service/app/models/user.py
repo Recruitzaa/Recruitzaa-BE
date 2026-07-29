@@ -2,6 +2,7 @@
 Auth Service SQLAlchemy ORM models.
 Maps to: users, user_profiles, user_fcm_tokens PostgreSQL tables.
 """
+
 import uuid
 from datetime import UTC, datetime
 
@@ -37,19 +38,26 @@ class User(Base):
         default=lambda: ["CANDIDATE"],
     )
     is_active = Column(Boolean, nullable=False, default=True)
-    created_at = Column(
-        DateTime(timezone=True), nullable=False, default=_now
-    )
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at = Column(
         DateTime(timezone=True), nullable=False, default=_now, onupdate=_now
     )
 
     # Relationships
     profile = relationship(
-        "UserProfile", back_populates="user", uselist=False, cascade="all, delete-orphan"
+        "UserProfile",
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan",
     )
     fcm_tokens = relationship(
         "UserFCMToken", back_populates="user", cascade="all, delete-orphan"
+    )
+    company_membership = relationship(
+        "CompanyMember",
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan",
     )
 
     def __repr__(self):
@@ -69,12 +77,12 @@ class UserProfile(Base):
     photo_url = Column(Text)
     location = Column(String(255))
     bio = Column(Text)
-    summary = Column(Text)          # AppUser.summary
+    summary = Column(Text)  # AppUser.summary
     notice_period = Column(String(50))  # AppUser.noticePeriod
     is_employed = Column(Boolean, default=False)  # AppUser.isCurrentlyEmployed
-    current_company = Column(String(255))   # AppUser.currentCompany
-    current_role = Column(String(255))      # AppUser.currentRole
-    current_salary = Column(String(50))     # AppUser.currentSalary
+    current_company = Column(String(255))  # AppUser.currentCompany
+    current_role = Column(String(255))  # AppUser.currentRole
+    current_salary = Column(String(50))  # AppUser.currentSalary
 
     user = relationship("User", back_populates="profile")
 
@@ -100,3 +108,52 @@ class UserFCMToken(Base):
 
     def __repr__(self):
         return f"<UserFCMToken user_id={self.user_id} platform={self.platform}>"
+
+
+class Company(Base):
+    __tablename__ = "companies"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(255), nullable=False, index=True)
+    domain = Column(String(255), unique=True, index=True)
+    website = Column(Text)
+    industry = Column(String(120))
+    company_size = Column(String(80))
+    company_type = Column(String(80))
+    hq_location = Column(String(255))
+    status = Column(String(20), nullable=False, default="PENDING", index=True)
+    plan = Column(String(20), nullable=False, default="FREE")
+    created_by_user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False, default=_now, onupdate=_now
+    )
+
+    members = relationship(
+        "CompanyMember", back_populates="company", cascade="all, delete-orphan"
+    )
+
+
+class CompanyMember(Base):
+    __tablename__ = "company_members"
+
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    company_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    member_role = Column(String(20), nullable=False, default="RECRUITER")
+    joined_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+
+    user = relationship("User", back_populates="company_membership")
+    company = relationship("Company", back_populates="members")

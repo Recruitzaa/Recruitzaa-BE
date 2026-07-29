@@ -2,6 +2,7 @@
 Alembic environment configuration for Auth Service.
 Uses async SQLAlchemy engine to support asyncpg.
 """
+
 import asyncio
 import os
 import sys
@@ -16,6 +17,8 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 from services.auth_service.app.models.user import (  # noqa: F401
+    Company,
+    CompanyMember,
     User,
     UserFCMToken,
     UserProfile,

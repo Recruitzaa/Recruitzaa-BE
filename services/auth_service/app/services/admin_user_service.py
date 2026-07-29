@@ -77,8 +77,8 @@ async def update_user_roles(
     data: UpdateUserRolesRequest,
 ) -> User:
     """Replace a user's primary and available roles."""
-    user.primary_role = data.primary_role.value
-    user.available_roles = [role.value for role in data.available_roles]
+    user.primary_role = data.primary_role
+    user.available_roles = data.available_roles
     await session.flush()
     return user
 

@@ -24,6 +24,7 @@ class AppUser(CamelModel):
     id: str
     firebase_uid: str
     email: str
+    email_verified: bool = False
 
     # Roles — multi-role v3
     primary_role: UserRole  # stored in PG users.primary_role

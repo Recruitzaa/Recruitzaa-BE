@@ -69,6 +69,9 @@ async def _cache_user(token_hash: str, user: AppUser, ttl: int = 300) -> None:
             ttl,
             user.model_dump_json(),
         )
+        user_tokens_key = f"firebase:user:{user.id}:tokens"
+        await redis.sadd(user_tokens_key, _token_cache_key(token_hash))
+        await redis.expire(user_tokens_key, ttl)
     except Exception as exc:
         logger.warning("Redis cache write failed: %s", exc)
 
@@ -146,6 +149,7 @@ async def get_current_user(
     from services.auth_service.app.services.user_service import user_to_app_user
 
     user = user_to_app_user(db_user)
+    user.email_verified = bool(decoded.get("email_verified", False))
 
     # 4. Cache result
     await _cache_user(token_hash, user)
@@ -165,10 +169,12 @@ def require_role(*roles: UserRole):
         user: Annotated[AppUser, Depends(get_current_user)],
     ) -> AppUser:
         effective_role = user.active_role or user.primary_role
-        if effective_role not in allowed:
+        effective_value = getattr(effective_role, "value", effective_role)
+        allowed_values = {role.value for role in allowed}
+        if effective_value not in allowed_values:
             # CamelModel sets use_enum_values, so AppUser role fields arrive as
             # plain strings rather than UserRole members.
-            role_label = getattr(effective_role, "value", effective_role)
+            role_label = effective_value
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"This endpoint requires one of: {[r.value for r in allowed]}. "

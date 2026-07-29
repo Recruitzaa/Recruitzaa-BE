@@ -92,6 +92,18 @@ async def create_user(
     # Idempotency check
     existing = await get_user_by_firebase_uid(session, firebase_uid)
     if existing:
+        requested_role_value = getattr(requested_role, "value", requested_role)
+        if requested_role_value not in existing.available_roles:
+            existing.available_roles = [
+                *existing.available_roles,
+                requested_role_value,
+            ]
+            await session.flush()
+            logger.info(
+                "Added self-service role=%s to existing user=%s",
+                requested_role_value,
+                existing.id,
+            )
         logger.info(
             "User already exists for firebase_uid=%s — returning existing", firebase_uid
         )

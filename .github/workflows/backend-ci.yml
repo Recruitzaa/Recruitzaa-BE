@@ -77,7 +77,7 @@ jobs:
 
       - name: Run Pytest Suite with Coverage
         run: |
-          PYTHONPATH=. pytest --cov=services/auth_service --cov=shared services/auth_service/tests/ --cov-fail-under=70
+          PYTHONPATH=. pytest --cov=services/auth_service --cov=shared services/auth_service/tests/ --cov-fail-under=85
         env:
           DATABASE_URL: postgresql+asyncpg://recruitzaa:recruitzaa_secret@localhost:5432/recruitzaa
           REDIS_URL: redis://:redis_secret@localhost:6379/0

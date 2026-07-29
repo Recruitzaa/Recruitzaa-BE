@@ -1,8 +1,9 @@
 """Company and employer-administration API schemas."""
 
 from datetime import datetime
+from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from shared.models.company import CompanyMemberRole, CompanyPlan, CompanyStatus
 from shared.utils.serialization import CamelModel
@@ -11,6 +12,16 @@ from shared.utils.serialization import CamelModel
 class EmployerCompanyRegistrationRequest(CamelModel):
     company_name: str = Field(min_length=2, max_length=255)
     company_website: str | None = Field(None, max_length=500)
+
+    @field_validator("company_name")
+    @classmethod
+    def normalize_company_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 2:
+            raise ValueError(
+                "company_name must contain at least 2 non-space characters"
+            )
+        return normalized
 
 
 class CompanyCreateRequest(CamelModel):
@@ -23,6 +34,14 @@ class CompanyCreateRequest(CamelModel):
     status: CompanyStatus = CompanyStatus.PENDING
     plan: CompanyPlan = CompanyPlan.FREE
 
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 2:
+            raise ValueError("name must contain at least 2 non-space characters")
+        return normalized
+
 
 class CompanyUpdateRequest(CamelModel):
     name: str | None = Field(None, min_length=2, max_length=255)
@@ -33,6 +52,16 @@ class CompanyUpdateRequest(CamelModel):
     hq_location: str | None = Field(None, max_length=255)
     status: CompanyStatus | None = None
     plan: CompanyPlan | None = None
+
+    @field_validator("name")
+    @classmethod
+    def normalize_optional_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if len(normalized) < 2:
+            raise ValueError("name must contain at least 2 non-space characters")
+        return normalized
 
 
 class CompanyResponse(CamelModel):
@@ -47,7 +76,7 @@ class CompanyResponse(CamelModel):
     status: CompanyStatus
     plan: CompanyPlan
     employer_count: int = 0
-    active_jobs: int = 0
+    active_jobs: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -70,7 +99,7 @@ class EmployerAdminResponse(CamelModel):
     company_name: str | None = None
     company_status: CompanyStatus | None = None
     member_role: CompanyMemberRole | None = None
-    active_jobs: int = 0
+    active_jobs: int | None = None
 
 
 class EmployerListResponse(CamelModel):
@@ -82,6 +111,6 @@ class EmployerListResponse(CamelModel):
 
 
 class EmployerUpdateRequest(CamelModel):
-    company_id: str | None = None
+    company_id: UUID | None = None
     member_role: CompanyMemberRole = CompanyMemberRole.RECRUITER
     is_active: bool | None = None

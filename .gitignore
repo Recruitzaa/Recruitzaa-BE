@@ -14,3 +14,10 @@ env/
 
 # Graphify indexes
 graphify-out/
+
+# Secrets
+secrets/
+*.json.key
+
+# System summary
+system_summary.txt

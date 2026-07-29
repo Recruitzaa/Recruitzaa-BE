@@ -1,23 +1,47 @@
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Python virtual environments
 .venv/
 venv/
 ENV/
 env/
+
+# Environment — NEVER commit secrets
 .env
 .env.local
-.ruff_cache/
-.pytest_cache/
-.DS_Store
-*.apk
+.env.staging
+.env.production
 
-# Graphify indexes
-graphify-out/
-
-# Secrets
+# Secrets — Firebase service account key etc.
 secrets/
 *.json.key
 
-# System summary
+# Linting / testing caches
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# macOS
+.DS_Store
+
+# Android
+*.apk
+
+# IDE
+.vscode/
+.idea/
+
+# Docker volumes (local)
+data/
+
+# Graphify indexes
+graphify-out/
+recruitzaa-firebase-adminsdk-fbsvc-ac08cd95f7.json
+
+# Credentials summary (contains passwords)
 system_summary.txt

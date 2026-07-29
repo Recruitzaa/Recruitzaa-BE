@@ -23,7 +23,7 @@ secrets/
 .pytest_cache/
 .mypy_cache/
 htmlcov/
-.coverage
+.coverage*
 coverage.xml
 
 # macOS
@@ -35,6 +35,8 @@ coverage.xml
 # IDE
 .vscode/
 .idea/
+.cursor/
+.cursorignore
 
 # Docker volumes (local)
 data/

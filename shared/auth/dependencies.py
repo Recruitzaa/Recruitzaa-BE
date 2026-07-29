@@ -166,10 +166,13 @@ def require_role(*roles: UserRole):
     ) -> AppUser:
         effective_role = user.active_role or user.primary_role
         if effective_role not in allowed:
+            # CamelModel sets use_enum_values, so AppUser role fields arrive as
+            # plain strings rather than UserRole members.
+            role_label = getattr(effective_role, "value", effective_role)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"This endpoint requires one of: {[r.value for r in allowed]}. "
-                f"Your active role is: {effective_role.value}",
+                f"Your active role is: {role_label}",
             )
         return user
 

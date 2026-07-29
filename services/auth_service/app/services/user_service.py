@@ -4,6 +4,7 @@ Auth Service — User service layer.
 Handles all PostgreSQL CRUD for users + user_profiles.
 """
 import logging
+import os
 from datetime import UTC, datetime
 
 from sqlalchemy import select, update
@@ -63,6 +64,7 @@ async def create_user(
     Create a new user + empty profile.
 
     This is idempotent — if firebase_uid already exists, return existing user.
+    Admin emails (from ADMIN_EMAILS env var) automatically get all 5 roles.
     """
     # Idempotency check
     existing = await get_user_by_firebase_uid(session, firebase_uid)
@@ -70,11 +72,26 @@ async def create_user(
         logger.info("User already exists for firebase_uid=%s — returning existing", firebase_uid)
         return existing
 
+    # Check if this email is an admin — auto-grant all 5 roles
+    admin_emails_raw = os.environ.get("ADMIN_EMAILS", "")
+    admin_emails = [e.strip().lower() for e in admin_emails_raw.split(",") if e.strip()]
+    all_roles = [r.value for r in UserRole]
+
+    requested_role_str = requested_role.value if hasattr(requested_role, "value") else str(requested_role)
+
+    if email.lower() in admin_emails:
+        roles = all_roles
+        role = requested_role_str
+        logger.info("Admin email detected (%s) — granting all roles", email)
+    else:
+        roles = [requested_role_str]
+        role = requested_role_str
+
     user = User(
         firebase_uid=firebase_uid,
         email=email,
-        primary_role=requested_role.value,
-        available_roles=[requested_role.value],
+        primary_role=role,
+        available_roles=roles,
         is_active=True,
     )
     session.add(user)

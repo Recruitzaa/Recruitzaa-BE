@@ -26,7 +26,7 @@ class AppUser(CamelModel):
     email: str
 
     # Roles — multi-role v3
-    primary_role: UserRole          # stored in PG users.primary_role
+    primary_role: UserRole  # stored in PG users.primary_role
     available_roles: list[UserRole]  # stored in PG users.available_roles[]
     active_role: UserRole | None = None  # set client-side via Launchpad; not persisted
 

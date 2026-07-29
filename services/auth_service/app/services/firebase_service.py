@@ -1,6 +1,7 @@
 """
 Auth Service — Firebase verification and token decoding.
 """
+
 import logging
 from typing import TypedDict
 
@@ -19,7 +20,9 @@ class FirebaseTokenData(TypedDict):
     picture: str | None
 
 
-def verify_firebase_token(id_token: str, check_revoked: bool = True) -> FirebaseTokenData:
+def verify_firebase_token(
+    id_token: str, check_revoked: bool = True
+) -> FirebaseTokenData:
     """
     Verify a Firebase ID token and return decoded claims.
 

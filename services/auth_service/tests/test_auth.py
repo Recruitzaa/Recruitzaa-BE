@@ -3,15 +3,22 @@ Auth Service Tests — /auth endpoints.
 
 Tests use httpx.AsyncClient with TestClient or real DB (integration tests).
 """
+
 import os
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 # Set test env before importing app
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://recruitzaa:recruitzaa_secret@localhost:5432/recruitzaa")
+os.environ.setdefault(
+    "DATABASE_URL",
+    "postgresql+asyncpg://recruitzaa:recruitzaa_secret@localhost:5432/recruitzaa",
+)
 os.environ.setdefault("REDIS_URL", "redis://:redis_secret@localhost:6379/0")
-os.environ.setdefault("MONGODB_URL", "mongodb://recruitzaa:mongo_secret@localhost:27017/recruitzaa?authSource=admin")
+os.environ.setdefault(
+    "MONGODB_URL",
+    "mongodb://recruitzaa:mongo_secret@localhost:27017/recruitzaa?authSource=admin",
+)
 os.environ.setdefault("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 os.environ.setdefault("APP_ENV", "test")
 
@@ -19,7 +26,10 @@ os.environ.setdefault("APP_ENV", "test")
 @pytest.fixture
 async def client():
     from services.auth_service.app.main import app
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
         yield ac
 
 
@@ -72,7 +82,9 @@ async def test_register_admin_role_rejected(client):
             json={"firebaseToken": "any", "requestedRole": role},
         )
         # 422 (validation error) before Firebase token check
-        assert resp.status_code == 422, f"Expected 422 for role {role}, got {resp.status_code}"
+        assert resp.status_code == 422, (
+            f"Expected 422 for role {role}, got {resp.status_code}"
+        )
 
 
 @pytest.mark.asyncio

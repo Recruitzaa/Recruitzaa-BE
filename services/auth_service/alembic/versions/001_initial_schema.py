@@ -1,9 +1,10 @@
 """Initial schema — users, user_profiles, user_fcm_tokens
 
 Revision ID: 001
-Revises: 
+Revises:
 Create Date: 2026-07-28
 """
+
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
@@ -18,22 +19,38 @@ def upgrade() -> None:
     # ── users ─────────────────────────────────────────────────────────────────
     op.create_table(
         "users",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True,
-                  server_default=sa.text("gen_random_uuid()")),
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
         sa.Column("firebase_uid", sa.String(128), nullable=False, unique=True),
         sa.Column("email", sa.String(255), nullable=False, unique=True),
-        sa.Column("primary_role", sa.String(20), nullable=False, server_default="CANDIDATE"),
+        sa.Column(
+            "primary_role", sa.String(20), nullable=False, server_default="CANDIDATE"
+        ),
         sa.Column(
             "available_roles",
             postgresql.ARRAY(sa.Text()),
             nullable=False,
             server_default=sa.text("ARRAY['CANDIDATE']::text[]"),
         ),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("TRUE")),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.text("NOW()")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.text("NOW()")),
+        sa.Column(
+            "is_active", sa.Boolean(), nullable=False, server_default=sa.text("TRUE")
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("NOW()"),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("NOW()"),
+        ),
     )
     op.create_index("ix_users_firebase_uid", "users", ["firebase_uid"])
     op.create_index("ix_users_email", "users", ["email"])
@@ -42,14 +59,18 @@ def upgrade() -> None:
     # ── user_profiles ─────────────────────────────────────────────────────────
     op.create_table(
         "user_profiles",
-        sa.Column("user_id", postgresql.UUID(as_uuid=True),
-                  sa.ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+        sa.Column(
+            "user_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="CASCADE"),
+            primary_key=True,
+        ),
         sa.Column("display_name", sa.String(255)),
         sa.Column("phone", sa.String(30)),
         sa.Column("photo_url", sa.Text()),
         sa.Column("location", sa.String(255)),
         sa.Column("bio", sa.Text()),
-        sa.Column("summary", sa.Text()),            # AppUser.summary
+        sa.Column("summary", sa.Text()),  # AppUser.summary
         sa.Column("notice_period", sa.String(50)),  # AppUser.noticePeriod
         sa.Column("is_employed", sa.Boolean(), server_default=sa.text("FALSE")),
         sa.Column("current_company", sa.String(255)),
@@ -60,14 +81,26 @@ def upgrade() -> None:
     # ── user_fcm_tokens ───────────────────────────────────────────────────────
     op.create_table(
         "user_fcm_tokens",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True,
-                  server_default=sa.text("gen_random_uuid()")),
-        sa.Column("user_id", postgresql.UUID(as_uuid=True),
-                  sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        sa.Column(
+            "user_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("token", sa.Text(), nullable=False, unique=True),
         sa.Column("platform", sa.String(20), nullable=False, server_default="web"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.text("NOW()")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("NOW()"),
+        ),
     )
     op.create_index("ix_user_fcm_tokens_user_id", "user_fcm_tokens", ["user_id"])
 

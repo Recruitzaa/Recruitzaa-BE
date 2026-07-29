@@ -1,6 +1,7 @@
 """
 shared/utils/exceptions.py — Custom HTTP exceptions for Recruitzaa.
 """
+
 from fastapi import HTTPException, status
 
 
@@ -33,6 +34,4 @@ class UnprocessableException(HTTPException):
 
 class ServiceUnavailableException(HTTPException):
     def __init__(self, detail: str = "Service temporarily unavailable"):
-        super().__init__(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail
-        )
+        super().__init__(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=detail)

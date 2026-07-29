@@ -1,6 +1,7 @@
 """
 shared/utils/cache.py — Redis cache helpers.
 """
+
 import json
 import logging
 from typing import Any, TypeVar

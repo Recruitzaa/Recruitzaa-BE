@@ -1,6 +1,7 @@
 """
 shared/database/redis_client.py — Async Redis client via redis-py.
 """
+
 import logging
 import os
 

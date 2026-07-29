@@ -3,6 +3,7 @@ Auth Service — /auth router.
 
 All endpoints defined in BE_PLAN_3 Section 5 Auth Service table.
 """
+
 import logging
 from datetime import UTC
 
@@ -59,13 +60,13 @@ async def register(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid Firebase token.",
-        )
+        ) from None
     except Exception as exc:
         logger.error("Firebase verification failed: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token verification failed.",
-        )
+        ) from None
 
     # 2. Create/fetch user in PostgreSQL
     user = await user_service.create_user(
@@ -82,6 +83,7 @@ async def register(
         from datetime import datetime
 
         from shared.database.mongo import get_mongo_db
+
         db = get_mongo_db()
         await db.candidate_profiles.update_one(
             {"user_id": str(user.id)},
@@ -143,7 +145,7 @@ async def verify_token(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token.",
-        )
+        ) from None
 
     user = await user_service.get_user_by_firebase_uid(session, token_data["uid"])
     if user is None:
@@ -181,7 +183,9 @@ async def get_me(
     # Refresh from DB to get latest available_roles (may have been updated by admin)
     db_user = await user_service.get_user_by_id(session, current_user.id)
     if db_user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
 
     return user_service.user_to_response(db_user)
 
@@ -199,7 +203,9 @@ async def update_me(
 ):
     db_user = await user_service.get_user_by_id(session, current_user.id)
     if db_user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
 
     updated = await user_service.update_profile(session, db_user, body)
 
@@ -254,6 +260,8 @@ async def register_fcm_token(
 ):
     db_user = await user_service.get_user_by_id(session, current_user.id)
     if db_user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
 
     await user_service.add_fcm_token(session, db_user, body)

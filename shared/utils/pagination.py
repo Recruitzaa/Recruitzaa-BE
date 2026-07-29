@@ -1,6 +1,7 @@
 """
 shared/utils/pagination.py — Pagination utilities.
 """
+
 from shared.utils.serialization import PaginatedResponse
 
 

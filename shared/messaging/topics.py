@@ -5,7 +5,7 @@ shared/messaging/topics.py — All Kafka topic names as constants.
 # ── User Events ───────────────────────────────────────────
 USER_REGISTERED = "user.registered"
 USER_ROLE_CHANGED = "user.role.changed"
-USER_ROLE_ADDED = "user.role.added"       # v3: second role granted
+USER_ROLE_ADDED = "user.role.added"  # v3: second role granted
 
 # ── Job Events ────────────────────────────────────────────
 JOB_CREATED = "job.created"
@@ -37,12 +37,21 @@ ANALYTICS_EVENT = "analytics.event"
 
 # All topics (for admin tooling / topic creation)
 ALL_TOPICS = [
-    USER_REGISTERED, USER_ROLE_CHANGED, USER_ROLE_ADDED,
-    JOB_CREATED, JOB_APPROVED, JOB_SCRAPED,
-    APPLICATION_CREATED, APPLICATION_STAGE_MOVED,
-    EXPERT_SESSION_BOOKED, EXPERT_SESSION_COMPLETED,
+    USER_REGISTERED,
+    USER_ROLE_CHANGED,
+    USER_ROLE_ADDED,
+    JOB_CREATED,
+    JOB_APPROVED,
+    JOB_SCRAPED,
+    APPLICATION_CREATED,
+    APPLICATION_STAGE_MOVED,
+    EXPERT_SESSION_BOOKED,
+    EXPERT_SESSION_COMPLETED,
     EMPLOYEE_TIMESHEET_SUBMITTED,
-    AI_SCORE_REQUEST, AI_SCORE_COMPLETED, AI_PARSE_REQUEST,
-    NOTIFICATION_EMAIL, NOTIFICATION_PUSH,
+    AI_SCORE_REQUEST,
+    AI_SCORE_COMPLETED,
+    AI_PARSE_REQUEST,
+    NOTIFICATION_EMAIL,
+    NOTIFICATION_PUSH,
     ANALYTICS_EVENT,
 ]

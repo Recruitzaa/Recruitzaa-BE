@@ -1,14 +1,15 @@
 """
 shared/auth/rbac.py — UserRole enum for all 5 Recruitzaa roles.
 """
+
 from enum import Enum
 
 
 class UserRole(str, Enum):
     CANDIDATE = "CANDIDATE"
     EMPLOYER = "EMPLOYER"
-    EXPERT = "EXPERT"        # v3: expert consulting sessions
-    EMPLOYEE = "EMPLOYEE"    # v3: internal employee timesheet/payroll
+    EXPERT = "EXPERT"  # v3: expert consulting sessions
+    EMPLOYEE = "EMPLOYEE"  # v3: internal employee timesheet/payroll
     SUPER_ADMIN = "SUPER_ADMIN"
 
     @classmethod

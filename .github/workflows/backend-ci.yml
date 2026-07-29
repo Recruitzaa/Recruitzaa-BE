@@ -24,7 +24,9 @@ jobs:
           python-version: '3.12'
 
       - name: Install Ruff
-        run: pip install ruff
+        # Pinned to match .pre-commit-config.yaml; an unpinned install drifts
+        # ahead of the hook and fails on formatting the hook just applied.
+        run: pip install ruff==0.16.0
 
       - name: Run Ruff Lint Check
         run: ruff check .

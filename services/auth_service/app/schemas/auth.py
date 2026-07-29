@@ -11,8 +11,10 @@ from shared.utils.serialization import CamelModel
 
 # ─── Request Schemas ──────────────────────────────────────────────────────────
 
+
 class RegisterRequest(CamelModel):
     """POST /auth/register body."""
+
     firebase_token: str = Field(..., description="Firebase ID token from client SDK")
     requested_role: UserRole = Field(
         UserRole.CANDIDATE,
@@ -25,19 +27,19 @@ class RegisterRequest(CamelModel):
     def validate_self_service_role(cls, v: str) -> str:
         admin_only = {r.value for r in UserRole.admin_only_roles()}
         if str(v) in admin_only:
-            raise ValueError(
-                f"{v} cannot be self-registered. Contact a SUPER_ADMIN."
-            )
+            raise ValueError(f"{v} cannot be self-registered. Contact a SUPER_ADMIN.")
         return v
 
 
 class VerifyTokenRequest(CamelModel):
     """POST /auth/verify body."""
+
     firebase_token: str
 
 
 class UpdateProfileRequest(CamelModel):
     """PUT /auth/me body."""
+
     display_name: str | None = None
     phone: str | None = None
     photo_url: str | None = None
@@ -53,11 +55,13 @@ class UpdateProfileRequest(CamelModel):
 
 class FCMTokenRequest(CamelModel):
     """POST /auth/fcm-token body."""
+
     token: str
     platform: str = Field("web", pattern="^(web|android|ios)$")
 
 
 # ─── Response Schemas ─────────────────────────────────────────────────────────
+
 
 class AppUserResponse(CamelModel):
     """
@@ -70,14 +74,15 @@ class AppUserResponse(CamelModel):
         appUser.isCurrentlyEmployed → employment badge
         ...etc
     """
+
     # Identity
     id: str
     email: str
     firebase_uid: str
 
     # Roles — THE CRITICAL FIELDS for Launchpad
-    role: UserRole                    # backward-compat: active or primary role
-    available_roles: list[UserRole]   # → "availableRoles" in JSON
+    role: UserRole  # backward-compat: active or primary role
+    available_roles: list[UserRole]  # → "availableRoles" in JSON
 
     # Profile
     display_name: str | None = None
@@ -107,6 +112,7 @@ class AppUserResponse(CamelModel):
 
 class AuthResponse(CamelModel):
     """Wrapper returned from register/verify/me endpoints."""
+
     user: AppUserResponse
     message: str = "OK"
 

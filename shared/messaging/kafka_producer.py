@@ -8,6 +8,7 @@ Usage:
     producer = await get_producer()
     await producer.send_event(USER_REGISTERED, {"user_id": "...", "email": "..."})
 """
+
 import json
 import logging
 import os

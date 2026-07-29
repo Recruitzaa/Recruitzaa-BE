@@ -1,6 +1,7 @@
 """
 shared/database/postgres.py — Async SQLAlchemy engine for PostgreSQL.
 """
+
 import logging
 import os
 from collections.abc import AsyncGenerator
@@ -74,4 +75,5 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 class Base(DeclarativeBase):
     """SQLAlchemy declarative base for all models."""
+
     pass

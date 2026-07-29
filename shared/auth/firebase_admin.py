@@ -1,6 +1,7 @@
 """
 shared/auth/firebase_admin.py — Firebase Admin SDK initialization.
 """
+
 import logging
 import os
 

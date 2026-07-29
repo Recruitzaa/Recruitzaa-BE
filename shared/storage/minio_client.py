@@ -1,6 +1,7 @@
 """
 shared/storage/minio_client.py — MinIO (S3-compatible) client wrapper.
 """
+
 import logging
 import os
 from io import BytesIO
@@ -22,7 +23,9 @@ def get_minio_client() -> Minio:
             secret_key=os.environ.get("MINIO_SECRET_KEY", "minio_secret"),
             secure=os.environ.get("MINIO_USE_SSL", "false").lower() == "true",
         )
-        logger.info("MinIO client created — endpoint=%s", os.environ.get("MINIO_ENDPOINT"))
+        logger.info(
+            "MinIO client created — endpoint=%s", os.environ.get("MINIO_ENDPOINT")
+        )
     return _client
 
 
@@ -57,6 +60,7 @@ def upload_file(
 def get_presigned_url(bucket: str, object_name: str, expires_hours: int = 1) -> str:
     """Generate a pre-signed URL for temporary access."""
     from datetime import timedelta
+
     client = get_minio_client()
     return client.presigned_get_object(
         bucket, object_name, expires=timedelta(hours=expires_hours)
@@ -68,4 +72,9 @@ def delete_file(bucket: str, object_name: str) -> None:
     try:
         client.remove_object(bucket, object_name)
     except S3Error as exc:
-        logger.warning("MinIO delete failed: bucket=%s object=%s error=%s", bucket, object_name, exc)
+        logger.warning(
+            "MinIO delete failed: bucket=%s object=%s error=%s",
+            bucket,
+            object_name,
+            exc,
+        )

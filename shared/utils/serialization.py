@@ -27,8 +27,8 @@ class CamelModel(BaseModel):
 
     model_config = ConfigDict(
         alias_generator=_to_camel,
-        populate_by_name=True,   # allow both snake_case and camelCase input
-        use_enum_values=True,    # serialize enums to their .value
+        populate_by_name=True,  # allow both snake_case and camelCase input
+        use_enum_values=True,  # serialize enums to their .value
     )
 
 

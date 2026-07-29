@@ -25,11 +25,11 @@ minio==7.2.20
 httpx==0.28.1
 
 # Utilities
-python-dotenv==1.0.1
-python-multipart==0.0.18
+python-dotenv==1.2.2
+python-multipart==0.0.31
 
 # Dev / test (also installed in prod for now)
-pytest==8.3.4
-pytest-asyncio==0.24.0
+pytest==9.0.3
+pytest-asyncio==1.4.0
 pytest-cov==6.0.0
 httpx==0.28.1

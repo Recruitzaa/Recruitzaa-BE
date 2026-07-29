@@ -1,0 +1,100 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [ "main", "master", "feat/*", "feature/*" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-format:
+    name: Lint & Format Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Ruff
+        run: pip install ruff
+
+      - name: Run Ruff Lint Check
+        run: ruff check .
+
+      - name: Run Ruff Format Check
+        run: ruff format --check .
+
+  security-audit:
+    name: Dependency Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Run Security Audit
+        run: pip-audit -r services/auth_service/requirements.txt
+
+  test-and-coverage:
+    name: Unit Tests & Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: 'services/auth_service/requirements.txt'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r services/auth_service/requirements.txt
+
+      - name: Run Pytest Suite with Coverage
+        run: |
+          PYTHONPATH=. pytest --cov=services/auth_service --cov=shared services/auth_service/tests/ --cov-fail-under=70
+        env:
+          DATABASE_URL: postgresql+asyncpg://recruitzaa:recruitzaa_secret@localhost:5432/recruitzaa
+          REDIS_URL: redis://:redis_secret@localhost:6379/0
+          MONGODB_URL: mongodb://recruitzaa:mongo_secret@localhost:27017/recruitzaa?authSource=admin
+          KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+          APP_ENV: test
+
+  docker-build-check:
+    name: Docker Container Build Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Auth Service Image (Dry Run)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: services/auth_service/Dockerfile
+          push: false
+          tags: recruitzaa-auth:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

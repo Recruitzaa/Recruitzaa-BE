@@ -1,0 +1,32 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic[email]==2.10.3
+pydantic-settings==2.6.1
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+motor==3.7.0
+
+# Auth
+firebase-admin==6.6.0
+
+# Cache
+redis==5.2.1
+
+# Messaging
+aiokafka==0.11.0
+
+# HTTP client
+httpx==0.28.1
+
+# Utilities
+python-dotenv==1.0.1
+python-multipart==0.0.18
+
+# Dev / test (also installed in prod for now)
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+httpx==0.28.1

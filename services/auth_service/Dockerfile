@@ -16,6 +16,7 @@ COPY shared /app/shared
 
 # Copy service code
 COPY services/auth_service /app/services/auth_service
+RUN chmod +x /app/services/auth_service/entrypoint.sh
 
 # Empty __init__ for services package
 RUN touch /app/services/__init__.py
@@ -28,4 +29,4 @@ EXPOSE 8001
 HEALTHCHECK --interval=15s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:8001/health || exit 1
 
-CMD ["uvicorn", "services.auth_service.app.main:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["/app/services/auth_service/entrypoint.sh"]

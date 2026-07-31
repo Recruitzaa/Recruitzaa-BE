@@ -4,6 +4,7 @@ from math import ceil
 from urllib.parse import urlparse
 
 from sqlalchemy import delete, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -35,8 +36,15 @@ def normalize_domain(website: str | None) -> str | None:
         return None
     value = website.strip().lower()
     parsed = urlparse(value if "://" in value else f"https://{value}")
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("Company website must use http or https.")
     domain = parsed.hostname
-    return domain.removeprefix("www.") if domain else None
+    if not domain:
+        raise ValueError("Company website must contain a valid domain.")
+    normalized = domain.removeprefix("www.").rstrip(".")
+    if "." not in normalized or any(not part for part in normalized.split(".")):
+        raise ValueError("Company website must contain a valid public domain.")
+    return normalized
 
 
 async def get_company(session: AsyncSession, company_id: str) -> Company | None:
@@ -71,8 +79,12 @@ async def create_company(
         plan=_enum_value(data.plan),
         created_by_user_id=created_by_user_id,
     )
-    session.add(company)
-    await session.flush()
+    try:
+        async with session.begin_nested():
+            session.add(company)
+            await session.flush()
+    except IntegrityError as exc:
+        raise ValueError("A company with this website domain already exists.") from exc
     await session.refresh(company, ["members"])
     return company
 
@@ -83,6 +95,7 @@ async def register_company_for_employer(
     *,
     company_name: str,
     company_website: str | None,
+    email_verified: bool = False,
 ) -> Company:
     membership = await session.scalar(
         select(CompanyMember)
@@ -109,10 +122,21 @@ async def register_company_for_employer(
             plan=CompanyPlan.FREE.value,
             created_by_user_id=user.id,
         )
-        session.add(company)
-        await session.flush()
+        try:
+            async with session.begin_nested():
+                session.add(company)
+                await session.flush()
+        except IntegrityError as exc:
+            raise ValueError(
+                "A company with this website domain already exists; retry registration."
+            ) from exc
         member_role = CompanyMemberRole.OWNER
     else:
+        email_domain = user.email.rsplit("@", 1)[-1].lower()
+        if not email_verified or email_domain != domain:
+            raise PermissionError(
+                "Your verified work email domain must match the existing company."
+            )
         member_role = CompanyMemberRole.RECRUITER
 
     session.add(
@@ -194,6 +218,14 @@ async def update_company(
             setattr(company, field, value)
     await session.flush()
     return company
+
+
+async def delete_company(session: AsyncSession, company: Company) -> None:
+    """Delete an empty company while protecting existing employer memberships."""
+    if company.members:
+        raise ValueError("Remove or reassign all employer accounts before deletion.")
+    await session.delete(company)
+    await session.flush()
 
 
 async def list_employers(
@@ -291,6 +323,13 @@ async def update_employer(
                 user.profile.current_company = company.name
         elif user.profile:
             user.profile.current_company = None
+    elif "member_role" in data.model_fields_set:
+        membership = await session.scalar(
+            select(CompanyMember).where(CompanyMember.user_id == user.id)
+        )
+        if membership is None:
+            raise LookupError("Assign a company before setting a company role.")
+        membership.member_role = _enum_value(data.member_role)
 
     await session.flush()
     return user

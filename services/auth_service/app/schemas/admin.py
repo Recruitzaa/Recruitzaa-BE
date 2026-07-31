@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import EmailStr, Field, field_validator, model_validator
 
 from shared.auth.rbac import UserRole
 from shared.utils.serialization import CamelModel
@@ -34,6 +34,41 @@ class UpdateUserStatusRequest(CamelModel):
     is_active: bool
 
 
+class AdminUserCreateRequest(UpdateUserRolesRequest):
+    """Create a Firebase and Recruitzaa account from the admin portal."""
+
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+    display_name: str = Field(min_length=2, max_length=255)
+    is_active: bool = True
+
+    @field_validator("display_name")
+    @classmethod
+    def display_name_must_not_be_blank(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("display_name must not be blank")
+        return normalized
+
+
+class AdminUserUpdateRequest(UpdateUserRolesRequest):
+    """Atomically update roles, status, and editable PostgreSQL profile fields."""
+
+    is_active: bool
+    display_name: str | None = Field(None, max_length=255)
+    phone: str | None = Field(None, max_length=30)
+    location: str | None = Field(None, max_length=255)
+    bio: str | None = None
+
+    @field_validator("display_name")
+    @classmethod
+    def normalize_optional_display_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
 class AdminUserResponse(CamelModel):
     """User identity, roles, status, and PostgreSQL profile data."""
 
@@ -56,6 +91,9 @@ class AdminUserResponse(CamelModel):
     current_company: str | None = None
     current_role: str | None = None
     current_salary: str | None = None
+    skills: list[str] = Field(default_factory=list)
+    resume_file_name: str | None = None
+    resume_file_size: str | None = None
 
 
 class AdminUserListResponse(CamelModel):

@@ -1,6 +1,6 @@
 """Authenticated employer company-registration endpoints."""
 
-from typing import Annotated
+from typing import Annotated, NamedTuple
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,10 +19,15 @@ from shared.models.user import AppUser
 router = APIRouter(prefix="/companies", tags=["Companies"])
 
 
+class EmployerContext(NamedTuple):
+    user: User
+    email_verified: bool
+
+
 async def require_employer(
     current_user: Annotated[AppUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_db)],
-) -> User:
+) -> EmployerContext:
     user = await user_service.get_user_by_id(session, current_user.id)
     if (
         user is None
@@ -33,7 +38,7 @@ async def require_employer(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="An active EMPLOYER role is required.",
         )
-    return user
+    return EmployerContext(user=user, email_verified=current_user.email_verified)
 
 
 @router.post(
@@ -43,12 +48,22 @@ async def require_employer(
 )
 async def register_employer_company(
     body: EmployerCompanyRegistrationRequest,
-    employer: Annotated[User, Depends(require_employer)],
+    employer: Annotated[EmployerContext, Depends(require_employer)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ):
-    return await company_service.register_company_for_employer(
-        session,
-        employer,
-        company_name=body.company_name,
-        company_website=body.company_website,
-    )
+    try:
+        return await company_service.register_company_for_employer(
+            session,
+            employer.user,
+            company_name=body.company_name,
+            company_website=body.company_website,
+            email_verified=employer.email_verified,
+        )
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc

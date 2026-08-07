@@ -183,3 +183,18 @@ def require_role(*roles: UserRole):
         return user
 
     return _check_role
+
+
+optional_security = HTTPBearer(auto_error=False)
+
+
+async def get_optional_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_security)],
+) -> AppUser | None:
+    """Optional authentication dependency for public endpoints enriched with user context."""
+    if not credentials or not credentials.credentials:
+        return None
+    try:
+        return await get_current_user(credentials)
+    except Exception:
+        return None

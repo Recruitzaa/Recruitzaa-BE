@@ -6,6 +6,7 @@ Using alias_generator ensures Pydantic automatically converts
 snake_case field names to camelCase in JSON output.
 """
 
+from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 
@@ -37,7 +38,7 @@ class APIResponse(CamelModel):
 
     success: bool = True
     message: str = "OK"
-    data: dict | list | None = None
+    data: Any = None
 
 
 class PaginatedResponse(CamelModel):

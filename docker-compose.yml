@@ -192,15 +192,12 @@ services:
     container_name: recruitzaa-auth
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       kafka:
         condition: service_healthy
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-recruitzaa}:${POSTGRES_PASSWORD:-recruitzaa_secret}@postgres:5432/${POSTGRES_DB:-recruitzaa}
       MONGODB_URL: mongodb://${MONGO_USER:-recruitzaa}:${MONGO_PASSWORD:-mongo_secret}@mongo:27017/${MONGO_DB:-recruitzaa}?authSource=admin
       REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -212,6 +209,42 @@ services:
       - recruitzaa-net
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  # ──────────────────────────────────────────
+  # Core API Service — Phase 2a
+  # ──────────────────────────────────────────
+  core-api:
+    build:
+      context: .
+      dockerfile: services/core_api_service/Dockerfile
+    container_name: recruitzaa-core-api
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      MONGODB_URL: mongodb://${MONGO_USER:-recruitzaa}:${MONGO_PASSWORD:-mongo_secret}@mongo:27017/${MONGO_DB:-recruitzaa}?authSource=admin
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./services/core_api_service:/app/services/core_api_service
+      - ./shared:/app/shared
+      - ./secrets:/app/secrets:ro
+    networks:
+      - recruitzaa-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 15s
       timeout: 5s
       retries: 5
